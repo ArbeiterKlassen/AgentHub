@@ -1,0 +1,829 @@
+#!/usr/bin/env node
+/**
+ * ah —— AgentHub 命令行客户端（零依赖，直接 node 运行）
+ *
+ * 主要能力：
+ *   身份     register / login / whoami / token
+ *   房间     rooms / room create|join|members|leave
+ *   消息     send / history / tail
+ *   文件     files list|upload|pull|rm
+ *   AI       agent list|run|speak|runs / discuss / control pause|resume|stop
+ *   运维     health / adapters / status
+ *
+ * 凭据默认保存在 ~/.agenthub/profiles/<profile>.json，可用 --profile 区分多个身份。
+ */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import process from 'node:process';
+import { spawn } from 'node:child_process';
+import { Readable } from 'node:stream';
+
+const DEFAULT_SERVER = process.env.AH_SERVER ?? 'http://127.0.0.1:8787';
+
+/* ------------------------------ 参数解析 ------------------------------ */
+
+function parseArgs(argv) {
+  const flags = {};
+  const positional = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const token = argv[i];
+    // 支持 --key value 与 -k value 两种写法；单独出现时视为布尔开关
+    if (token.startsWith('-') && token.length > 1 && !/^-\d/.test(token)) {
+      const key = token.replace(/^--?/, '');
+      const next = argv[i + 1];
+      if (next === undefined || (next.startsWith('-') && !/^-\d/.test(next) && next.length > 1)) {
+        flags[key] = true;
+      } else {
+        flags[key] = next;
+        i += 1;
+      }
+    } else {
+      positional.push(token);
+    }
+  }
+  return { flags, positional };
+}
+
+const { flags: FLAGS, positional: ARGS } = parseArgs(process.argv.slice(2));
+const COMMAND = ARGS[0] ?? 'help';
+const SUB = ARGS[1];
+const JSON_OUT = Boolean(FLAGS.json);
+
+/* ------------------------------- 配置 ------------------------------- */
+
+const PROFILE_DIR = path.join(os.homedir(), '.agenthub', 'profiles');
+const profileName = String(FLAGS.profile ?? process.env.AH_PROFILE ?? 'default');
+const profilePath = path.join(PROFILE_DIR, `${profileName}.json`);
+
+function loadProfile() {
+  let stored = {};
+  try {
+    stored = JSON.parse(fs.readFileSync(profilePath, 'utf8'));
+  } catch {
+    stored = {};
+  }
+  return {
+    server: FLAGS.server ?? process.env.AH_SERVER ?? stored.server ?? DEFAULT_SERVER,
+    tag: FLAGS.tag ?? process.env.AH_TAG ?? stored.tag ?? null,
+    token: FLAGS.token ?? process.env.AH_TOKEN ?? stored.token ?? null,
+    room: FLAGS.room ?? process.env.AH_ROOM ?? stored.room ?? null,
+  };
+}
+
+function saveProfile(patch) {
+  const current = loadProfile();
+  const next = { ...current, ...patch };
+  fs.mkdirSync(PROFILE_DIR, { recursive: true });
+  fs.writeFileSync(profilePath, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+  return next;
+}
+
+const CONFIG = loadProfile();
+
+/* -------------------------------- 输出 -------------------------------- */
+
+const colors = process.stdout.isTTY && !process.env.NO_COLOR;
+const c = (code, text) => (colors ? `\u001b[${code}m${text}\u001b[0m` : text);
+const dim = (t) => c('2', t);
+const bold = (t) => c('1', t);
+const red = (t) => c('31', t);
+const green = (t) => c('32', t);
+const yellow = (t) => c('33', t);
+const cyan = (t) => c('36', t);
+
+function out(value) {
+  if (JSON_OUT) {
+    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+    return;
+  }
+  if (typeof value === 'string') {
+    process.stdout.write(`${value}\n`);
+    return;
+  }
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function die(message, code = 1) {
+  process.stderr.write(`${red('错误')} ${message}\n`);
+  process.exit(code);
+}
+
+function fmtTime(ts) {
+  const d = new Date(ts);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function fmtSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function fmtMessage(m) {
+  const who =
+    m.senderKind === 'agent'
+      ? cyan(`@${m.senderTag}`)
+      : m.senderKind === 'system'
+        ? yellow('系统')
+        : green(`@${m.senderTag}`);
+  const head = `${dim(fmtTime(m.createdAt))} ${who}${m.senderNickname && m.senderKind !== 'system' ? dim(`(${m.senderNickname})`) : ''}`;
+  const chain = m.hop ? dim(` [接力 ${m.hop}]`) : '';
+  const ids = dim(`#${m.id}`);
+  const files = (m.files ?? []).length ? dim(` 📎x${m.files.length}`) : '';
+  return `${ids} ${head}${chain}${files}\n    ${String(m.text).replace(/\n/g, '\n    ')}`;
+}
+
+/* -------------------------------- HTTP -------------------------------- */
+
+async function request(pathname, { method = 'GET', body, headers = {}, raw = false, auth = true } = {}) {
+  const url = `${CONFIG.server.replace(/\/+$/, '')}${pathname}`;
+  const finalHeaders = { ...headers };
+  if (auth && CONFIG.token) finalHeaders.Authorization = `Bearer ${CONFIG.token}`;
+  let payload = body;
+  if (body !== undefined && !raw) {
+    finalHeaders['Content-Type'] = 'application/json';
+    payload = JSON.stringify(body);
+  }
+  let res;
+  try {
+    res = await fetch(url, { method, headers: finalHeaders, body: payload, duplex: raw ? 'half' : undefined });
+  } catch (err) {
+    die(`无法连接 ${url}：${err.message}\n提示：先用 npm run dev 启动后端，或用 --server 指定地址`);
+  }
+  if (res.status === 204) return {};
+  const text = await res.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { raw: text };
+  }
+  if (!res.ok) {
+    const detail = data?.error ?? text.slice(0, 400);
+    die(`${res.status} ${detail}${res.status === 401 ? `\n提示：先执行 ah login --tag <tag> --token <token>` : ''}`);
+  }
+  return data;
+}
+
+function needAuth() {
+  if (!CONFIG.token) {
+    die(`当前 profile「${profileName}」还没有登录凭据。\n先执行：ah register --tag <tag> --nickname <昵称>  或  ah login --tag <tag> --token <token>`);
+  }
+  if (!CONFIG.tag) {
+    die('缺少身份 tag：请在 profile 里指定（ah login --tag ...）或用 --tag 覆盖');
+  }
+}
+
+async function currentRoom(explicit) {
+  const room = explicit ?? CONFIG.room;
+  if (room) return room;
+  const { rooms } = await request('/api/rooms');
+  if (!rooms?.length) die('你还没有加入任何房间：ah room create <名字>');
+  return rooms[0].name;
+}
+
+/* ------------------------------- 命令实现 ------------------------------- */
+
+const HELP = `${bold('AgentHub CLI (ah)')} —— 人和 AI CLI 群聊的终端入口
+
+${bold('身份')}
+  ah register --tag alice --nickname Alice [--kind agent --adapter codex] [--server URL]
+  ah login --tag alice --token <token> [--profile work]
+  ah whoami
+
+${bold('房间')}
+  ah rooms
+  ah room create "设计评审" [--topic "..." ] [--members alice,codex-1]
+  ah room join <房间> --tag <tag>
+  ah room members <房间>
+
+${bold('消息')}
+  ah send "大家好 @codex-1 帮忙看下这个方案" [--room general] [--to @claude-1]
+  ah history [--room general] [--limit 20] [--since 30m] [--search 关键字] [--json]
+  ah tail [--room general] [--interval 1] [--json]
+
+${bold('共享文件')}
+  ah files list [--room general]
+  ah files upload ./方案.pdf [--room general]
+  ah files pull <fileId> [-o 本地路径]
+  ah files rm <fileId>
+
+${bold('AI 成员')}
+  ah agent list [--room general]
+  ah agent run --tag codex-1 [--room general] [--all] [--once] [--dry-run] [--cwd DIR] [--adapter codex]
+  ah agent speak --tag codex-1 [--room general]
+  ah agent runs --tag codex-1 [--limit 10]
+  ah discuss "主题" --with @codex-1,@claude-1 [--rounds 2] [--room general]
+  ah control pause|resume|stop [--room general]
+
+${bold('运维')}
+  ah health | ah adapters | ah status
+
+${dim('全局参数：--server URL --profile 名称 --tag TAG --token TOKEN --room 房间 --json')}
+${dim(`当前 profile：${profileName}（${profilePath}）`)}`;
+
+async function cmdRegister() {
+  const tag = String(FLAGS.tag ?? ARGS[2] ?? '');
+  if (!tag) die('缺少 --tag，例如：ah register --tag alice --nickname Alice');
+  const body = {
+    tag,
+    nickname: FLAGS.nickname ?? tag,
+    kind: FLAGS.kind === 'agent' ? 'agent' : 'human',
+    agentKind: typeof FLAGS['agent-kind'] === 'string' ? FLAGS['agent-kind'] : undefined,
+    adapterId: typeof FLAGS.adapter === 'string' ? FLAGS.adapter : undefined,
+    workdir: typeof FLAGS.cwd === 'string' ? FLAGS.cwd : undefined,
+    systemPrompt: typeof FLAGS['system-prompt'] === 'string' ? FLAGS['system-prompt'] : undefined,
+    triggerMode: typeof FLAGS.trigger === 'string' ? FLAGS.trigger : undefined,
+  };
+  const res = await request('/api/register', { method: 'POST', body, auth: false });
+  const patch = { server: CONFIG.server, tag: res.member.tag, token: res.token };
+  if (FLAGS.room) patch.room = String(FLAGS.room);
+  saveProfile(patch);
+  if (JSON_OUT) return out(res);
+  out(
+    `${green('注册成功')} tag=${bold(res.member.tag)} 昵称=${res.member.nickname} 类型=${res.member.kind}` +
+      `${res.member.role === 'admin' ? yellow('（首个注册者，管理员）') : ''}\n` +
+      `token=${bold(res.token)}\n${dim(`已保存到 ${profilePath}`)}`,
+  );
+  if (FLAGS.room) await joinRoomByName(String(FLAGS.room));
+}
+
+async function cmdLogin() {
+  const tag = String(FLAGS.tag ?? ARGS[2] ?? '');
+  const token = String(FLAGS.token ?? ARGS[3] ?? '');
+  if (!tag || !token) die('用法：ah login --tag alice --token <token>');
+  const res = await request('/api/login', { method: 'POST', body: { tag, token }, auth: false });
+  saveProfile({ server: CONFIG.server, tag: res.member.tag, token });
+  if (JSON_OUT) return out(res);
+  out(`${green('登录成功')} @${res.member.tag}（${res.member.nickname}）${dim(`\n凭据已保存到 ${profilePath}`)}`);
+}
+
+async function cmdWhoami() {
+  needAuth();
+  const res = await request('/api/me');
+  if (JSON_OUT) return out(res);
+  out(
+    `@${res.member.tag}｜${res.member.nickname}｜${res.member.kind === 'agent' ? `AI(${res.member.agentKind ?? ''})` : '人类'}｜角色 ${res.member.role}\n` +
+      `token=${bold(res.member.token)}\n房间：${res.rooms.map((r) => `${r.name}(${r.memberCount}人/${r.messageCount}条)`).join('、') || '（无）'}\n` +
+      dim(`服务地址 ${CONFIG.server}`),
+  );
+}
+
+async function cmdRooms() {
+  needAuth();
+  const res = await request('/api/rooms');
+  if (JSON_OUT) return out(res);
+  if (!res.rooms.length) return out(dim('还没有房间：ah room create "第一天"'));
+  out(
+    res.rooms
+      .map(
+        (r) =>
+          `${bold(r.name)} ${dim(`(${r.id})`)} ${r.paused ? yellow('[已暂停]') : ''}\n` +
+          `  ${dim(`成员 ${r.memberCount}（AI ${r.agentCount}）｜消息 ${r.messageCount}`)}` +
+          `${r.lastMessage ? `\n  最近：${String(r.lastMessage.text).slice(0, 60)}` : ''}`,
+      )
+      .join('\n'),
+  );
+}
+
+async function joinRoomByName(name) {
+  try {
+    const res = await request(`/api/rooms/${encodeURIComponent(name)}/members`, {
+      method: 'POST',
+      body: { tag: CONFIG.tag },
+    });
+    saveProfile({ room: name });
+    if (!JSON_OUT) out(`${green('已加入房间')} ${name}`);
+    return res;
+  } catch (err) {
+    if (!JSON_OUT) process.stderr.write(dim(`（未能自动加入房间 ${name}：${err.message}）\n`));
+    return null;
+  }
+}
+
+async function cmdRoom() {
+  needAuth();
+  if (SUB === 'create') {
+    const name = String(FLAGS.name ?? ARGS[2] ?? '');
+    if (!name) die('用法：ah room create "房间名" [--topic ...] [--members a,b]');
+    const members = String(FLAGS.members ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const res = await request('/api/rooms', {
+      method: 'POST',
+      body: { name, topic: FLAGS.topic ?? '', members },
+    });
+    saveProfile({ room: res.room.name });
+    if (JSON_OUT) return out(res);
+    return out(`${green('房间已创建')} ${bold(res.room.name)} ${dim(`(${res.room.id})`)}，当前房间已切换`);
+  }
+  if (SUB === 'join') {
+    const room = String(ARGS[2] ?? FLAGS.room ?? '');
+    if (!room) die('用法：ah room join <房间> [--tag <tag>]');
+    const res = await request(`/api/rooms/${encodeURIComponent(room)}/members`, {
+      method: 'POST',
+      body: { tag: FLAGS.tag ?? CONFIG.tag },
+    });
+    saveProfile({ room });
+    if (JSON_OUT) return out(res);
+    return out(`${green('已加入')} ${room}`);
+  }
+  if (SUB === 'members') {
+    const room = await currentRoom(ARGS[2]);
+    const res = await request(`/api/rooms/${encodeURIComponent(room)}`);
+    if (JSON_OUT) return out(res);
+    return out(
+      res.members
+        .map(
+          (m) =>
+            `${m.kind === 'agent' ? cyan('AI ') : green('人 ')} @${m.tag}｜${m.nickname}` +
+            `${m.kind === 'agent' ? dim(`｜${m.agentKind ?? ''}｜状态 ${m.status}${m.statusDetail ? ` (${m.statusDetail})` : ''}`) : ''}`,
+        )
+        .join('\n'),
+    );
+  }
+  if (SUB === 'leave') {
+    const room = await currentRoom(ARGS[2]);
+    const res = await request(`/api/rooms/${encodeURIComponent(room)}/members/${CONFIG.tag}`, { method: 'DELETE' });
+    return out(JSON_OUT ? res : `${green('已退出')} ${room}`);
+  }
+  die(`未知子命令 room ${SUB ?? ''}，可用：create / join / members / leave`);
+}
+
+async function cmdSend() {
+  needAuth();
+  const textParts = ARGS.slice(1).filter((a) => !a.startsWith('-'));
+  let text = String(FLAGS.text ?? textParts.join(' ')).trim();
+  const to = String(FLAGS.to ?? '')
+    .split(',')
+    .map((s) => s.trim().replace(/^@/, ''))
+    .filter(Boolean);
+  if (to.length) text += ` ${to.map((t) => `@${t}`).join(' ')}`;
+  if (!text) die('用法：ah send "消息内容" [--room general] [--to @codex-1]');
+  const room = await currentRoom();
+  const files = [];
+  const fileFlag = FLAGS.file;
+  for (const filePath of Array.isArray(fileFlag) ? fileFlag : fileFlag ? [fileFlag] : []) {
+    const abs = path.resolve(String(filePath));
+    if (!fs.existsSync(abs)) die(`文件不存在：${abs}`);
+    const stat = fs.statSync(abs);
+    const res = await request(`/api/rooms/${encodeURIComponent(room)}/files`, {
+      method: 'POST',
+      raw: true,
+      body: Readable.toWeb(fs.createReadStream(abs)),
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-File-Name': encodeURIComponent(path.basename(abs)),
+        'Content-Length': String(stat.size),
+      },
+    });
+    files.push(res.file.id);
+  }
+  const res = await request(`/api/rooms/${encodeURIComponent(room)}/messages`, {
+    method: 'POST',
+    body: {
+      text,
+      files,
+      chainId: FLAGS.chain ?? null,
+      hop: FLAGS.hop ? Number(FLAGS.hop) : 0,
+      replyTo: FLAGS['reply-to'] ? Number(FLAGS['reply-to']) : null,
+      meta: FLAGS['as-agent'] ? { edge: true } : {},
+    },
+  });
+  if (JSON_OUT) return out(res);
+  out(`${green('已发送')} #${res.message.id} 至 ${room}${res.queued ? dim(`，已唤醒 ${res.queued} 个 AI`) : ''}`);
+}
+
+function parseSince(value) {
+  if (!value) return null;
+  const m = String(value).match(/^(\d+)([smhd])$/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  const unit = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2]];
+  return Date.now() - n * unit;
+}
+
+async function cmdHistory() {
+  needAuth();
+  const room = await currentRoom();
+  const params = new URLSearchParams({ limit: String(FLAGS.limit ?? 20) });
+  if (FLAGS.search) params.set('search', String(FLAGS.search));
+  if (FLAGS.sender) params.set('sender', String(FLAGS.sender).replace(/^@/, ''));
+  if (FLAGS.before) params.set('before', String(FLAGS.before));
+  const res = await request(`/api/rooms/${encodeURIComponent(room)}/messages?${params}`);
+  if (JSON_OUT) return out(res);
+  const since = parseSince(FLAGS.since);
+  const messages = since ? res.messages.filter((m) => m.createdAt >= since) : res.messages;
+  if (!messages.length) return out(dim('（没有符合条件的消息）'));
+  out(`${bold(room)} 最近 ${messages.length} 条消息\n`);
+  out(messages.map(fmtMessage).join('\n\n'));
+}
+
+async function cmdTail() {
+  needAuth();
+  const room = await currentRoom();
+  let lastId = Number(FLAGS.after ?? 0);
+  if (!lastId) {
+    const head = await request(`/api/rooms/${encodeURIComponent(room)}/messages?limit=1`);
+    lastId = head.messages.at(-1)?.id ?? 0;
+  }
+  if (!JSON_OUT) out(dim(`正在跟踪 ${room} 的新消息（Ctrl+C 退出，从 #${lastId} 之后开始）`));
+  const interval = Number(FLAGS.interval ?? 0) * 1000;
+  for (;;) {
+    const res = await request(
+      `/api/events?room=${encodeURIComponent(room)}&after=${lastId}&timeout=${interval ? 1000 : 25000}`,
+    );
+    for (const message of res.messages ?? []) {
+      lastId = Math.max(lastId, message.id);
+      if (JSON_OUT) out({ ...message, room });
+      else out(fmtMessage(message));
+    }
+    if (FLAGS.once) return;
+    if (interval) await new Promise((r) => setTimeout(r, interval));
+  }
+}
+
+async function cmdFiles() {
+  needAuth();
+  const room = await currentRoom();
+  if (!SUB || SUB === 'list' || SUB === 'ls') {
+    const res = await request(`/api/rooms/${encodeURIComponent(room)}/files`);
+    if (JSON_OUT) return out(res);
+    if (!res.files.length) return out(dim('共享文件区还没有文件'));
+    return out(
+      res.files
+        .map(
+          (f) =>
+            `${bold(f.name)} ${dim(f.id)}\n  ${fmtSize(f.size)}｜@${f.uploaderTag}｜${fmtTime(f.createdAt)}`,
+        )
+        .join('\n'),
+    );
+  }
+  if (SUB === 'upload') {
+    const filePath = String(FLAGS.file ?? ARGS[2] ?? '');
+    if (!filePath) die('用法：ah files upload <本地路径> [--room general]');
+    const abs = path.resolve(filePath);
+    if (!fs.existsSync(abs)) die(`文件不存在：${abs}`);
+    const stat = fs.statSync(abs);
+    const res = await request(`/api/rooms/${encodeURIComponent(room)}/files`, {
+      method: 'POST',
+      raw: true,
+      body: Readable.toWeb(fs.createReadStream(abs)),
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-File-Name': encodeURIComponent(path.basename(abs)),
+        'Content-Length': String(stat.size),
+      },
+    });
+    if (JSON_OUT) return out(res);
+    return out(`${green('已上传')} ${res.file.name}（${fmtSize(res.file.size)}）id=${bold(res.file.id)}`);
+  }
+  if (SUB === 'pull' || SUB === 'download') {
+    const id = String(ARGS[2] ?? '');
+    if (!id) die('用法：ah files pull <fileId> [-o 本地路径]');
+    const list = await request(`/api/rooms/${encodeURIComponent(room)}/files`);
+    const meta = list.files.find((f) => f.id === id);
+    const target = path.resolve(String(FLAGS.o ?? FLAGS.out ?? meta?.name ?? id));
+    const res = await fetch(`${CONFIG.server}/api/files/${id}?download=1`, {
+      headers: CONFIG.token ? { Authorization: `Bearer ${CONFIG.token}` } : {},
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      die(`下载失败：${res.status} ${detail.slice(0, 200)}`);
+    }
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    await new Promise((resolve, reject) => {
+      const fileStream = fs.createWriteStream(target);
+      Readable.fromWeb(res.body).pipe(fileStream);
+      fileStream.on('finish', resolve);
+      fileStream.on('error', reject);
+    });
+    return out(`${green('已下载')} ${target}`);
+  }
+  if (SUB === 'rm' || SUB === 'delete') {
+    const id = String(ARGS[2] ?? '');
+    if (!id) die('用法：ah files rm <fileId>');
+    const res = await request(`/api/files/${id}`, { method: 'DELETE' });
+    return out(JSON_OUT ? res : `${green('已删除')} ${id}`);
+  }
+  die(`未知子命令 files ${SUB}`);
+}
+
+async function cmdAgent() {
+  needAuth();
+  if (SUB === 'list' || !SUB) {
+    const room = await currentRoom();
+    const res = await request(`/api/rooms/${encodeURIComponent(room)}/agents`);
+    if (JSON_OUT) return out(res);
+    if (!res.agents.length) return out(dim('这个房间还没有 AI 成员'));
+    return out(
+      res.agents
+        .map(
+          (a) =>
+            `${cyan('AI')} @${a.tag}｜${a.nickname}｜适配器 ${a.adapterId}｜触发 ${a.triggerMode}｜状态 ${a.status}`,
+        )
+        .join('\n'),
+    );
+  }
+  if (SUB === 'speak') {
+    const tag = String(FLAGS.tag ?? ARGS[2] ?? '').replace(/^@/, '');
+    if (!tag) die('用法：ah agent speak --tag codex-1 [--room general]');
+    const room = await currentRoom();
+    const res = await request(`/api/rooms/${encodeURIComponent(room)}/agents/${tag}/speak`, { method: 'POST' });
+    return out(JSON_OUT ? res : `${green('已排队')} @${tag} 主动发言（服务端执行）`);
+  }
+  if (SUB === 'runs') {
+    const tag = String(FLAGS.tag ?? CONFIG.tag).replace(/^@/, '');
+    const res = await request(`/api/agents/${tag}/runs?limit=${FLAGS.limit ?? 10}`);
+    if (JSON_OUT) return out(res);
+    return out(
+      res.runs
+        .map(
+          (r) =>
+            `${r.status === 'ok' ? green('ok') : red(r.status)} ${dim(fmtTime(r.createdAt))} ${r.adapterId ?? ''} ${r.durationMs ? `${r.durationMs}ms` : ''}` +
+            `${r.error ? `\n   ${red(r.error)}` : ''}`,
+        )
+        .join('\n') || dim('没有运行记录'),
+    );
+  }
+  if (SUB === 'run') return cmdAgentRun();
+  die(`未知子命令 agent ${SUB}`);
+}
+
+async function loadAdapterFor(tag, room) {
+  const res = await request(`/api/rooms/${encodeURIComponent(room)}/agents/${tag}/prompt?trigger=0`);
+  return res.adapter;
+}
+
+function runLocalAdapter(adapter, promptText, { cwd }) {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    if (adapter.kind === 'http') {
+      const splitAt = promptText.indexOf('【最近的群聊记录】');
+      const systemPart = splitAt > 0 ? promptText.slice(0, splitAt).trim() : '';
+      const userPart = splitAt > 0 ? promptText.slice(splitAt).trim() : promptText;
+      fetch(adapter.endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(adapter.apiKey ? { Authorization: `Bearer ${adapter.apiKey}` } : {}),
+        },
+        body: JSON.stringify({
+          model: adapter.model,
+          messages: [
+            ...(systemPart ? [{ role: 'system', content: systemPart }] : []),
+            { role: 'user', content: userPart },
+          ],
+          stream: false,
+        }),
+      })
+        .then(async (res) => {
+          const raw = await res.text();
+          let text = raw;
+          try {
+            const data = JSON.parse(raw);
+            text = data.choices?.[0]?.message?.content ?? data.message?.content ?? raw;
+          } catch {
+            /* 保持原文 */
+          }
+          resolve({ ok: res.ok, text, durationMs: Date.now() - started, error: res.ok ? null : `HTTP ${res.status}` });
+        })
+        .catch((err) => resolve({ ok: false, text: '', durationMs: Date.now() - started, error: err.message }));
+      return;
+    }
+    const vars = {
+      '{repo}': path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', '..'),
+      '{cwd}': cwd,
+      '{tag}': CONFIG.tag,
+      '{nickname}': CONFIG.tag,
+      '{room}': '',
+      '{prompt}': promptText,
+      '{promptFile}': '',
+      '{outputFile}': '',
+    };
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ahcli-'));
+    const promptFile = path.join(tmpDir, 'prompt.txt');
+    const outputFile = path.join(tmpDir, 'output.txt');
+    vars['{promptFile}'] = promptFile;
+    vars['{outputFile}'] = outputFile;
+    fs.writeFileSync(promptFile, promptText, 'utf8');
+    const substitute = (tpl) => Object.entries(vars).reduce((acc, [k, v]) => acc.split(k).join(v), tpl);
+    const args = (adapter.args ?? []).map(substitute);
+    const child = spawn(substitute(adapter.command ?? ''), args, {
+      cwd,
+      shell: process.platform === 'win32',
+      windowsHide: true,
+      env: { ...process.env, ...(adapter.env ?? {}), NO_COLOR: '1' },
+    });
+    let stdout = '';
+    let stderr = '';
+    const timeout = setTimeout(() => {
+      try {
+        child.kill();
+      } catch {
+        /* ignore */
+      }
+    }, adapter.timeoutMs ?? 900_000);
+    child.stdout.on('data', (chunk) => {
+      stdout += String(chunk);
+      if (!JSON_OUT) process.stderr.write(dim(String(chunk).slice(0, 400)));
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on('error', (err) => {
+      clearTimeout(timeout);
+      resolve({ ok: false, text: '', durationMs: Date.now() - started, error: err.message });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      let text = stdout;
+      if ((adapter.output === 'file' || adapter.output === undefined) && fs.existsSync(outputFile)) {
+        const fromFile = fs.readFileSync(outputFile, 'utf8');
+        if (fromFile.trim()) text = fromFile;
+      }
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      resolve({
+        ok: code === 0,
+        text,
+        durationMs: Date.now() - started,
+        error: code === 0 ? null : `退出码 ${code}：${stderr.slice(0, 300)}`,
+      });
+    });
+    if ((adapter.input ?? 'stdin') === 'stdin') child.stdin.write(promptText);
+    child.stdin.end();
+  });
+}
+
+async function cmdAgentRun() {
+  const tag = String(FLAGS.tag ?? CONFIG.tag ?? '').replace(/^@/, '');
+  if (!tag) die('用法：ah agent run --tag codex-1 [--room general] [--all] [--once]');
+  const room = await currentRoom();
+  const cwd = path.resolve(String(FLAGS.cwd ?? process.cwd()));
+  if (!fs.existsSync(cwd)) die(`工作目录不存在：${cwd}`);
+  const adapter = await loadAdapterFor(tag, room);
+  if (!JSON_OUT) {
+    out(
+      `${green('边缘运行器启动')}：以 @${tag} 身份在「${room}」监听，使用适配器 ${bold(adapter.id ?? adapter.label ?? '')}` +
+        `${FLAGS.all ? yellow('（所有消息都参与）') : '（仅被 @ 时参与）'}\n${dim(`工作目录 ${cwd}｜Ctrl+C 退出`)}`,
+    );
+  }
+  let lastId = Number(FLAGS.after ?? 0);
+  if (!lastId) {
+    const head = await request(`/api/rooms/${encodeURIComponent(room)}/messages?limit=1`);
+    lastId = head.messages.at(-1)?.id ?? 0;
+  }
+  for (;;) {
+    const res = await request(
+      `/api/events?room=${encodeURIComponent(room)}&after=${lastId}&timeout=${FLAGS.once ? 0 : 25000}`,
+    );
+    for (const message of res.messages ?? []) {
+      lastId = Math.max(lastId, message.id);
+      if (message.senderKind === 'system') continue;
+      if (message.senderTag === tag) continue;
+      const mentioned = (message.mentions ?? []).includes(tag);
+      if (!mentioned && !FLAGS.all) continue;
+      if (!JSON_OUT) out(dim(`→ 被唤醒：${fmtMessage(message)}`));
+      const prepared = await request(
+        `/api/rooms/${encodeURIComponent(room)}/agents/${tag}/prompt?trigger=${message.id}`,
+      );
+      if (FLAGS['dry-run']) {
+        out(`\n${bold('=== 将发送给 CLI 的提示词 ===')}\n${prepared.prompt}\n`);
+        continue;
+      }
+      const run = await runLocalAdapter(prepared.adapter, prepared.prompt, { cwd });
+      if (!run.ok) {
+        process.stderr.write(red(`✗ CLI 执行失败：${run.error}\n`));
+        await request(`/api/agents/${tag}/runs`, {
+          method: 'POST',
+          body: {
+            roomId: prepared.roomId,
+            triggerMsgId: message.id,
+            chainId: prepared.chainId,
+            hop: prepared.hop,
+            status: 'error',
+            adapterId: prepared.adapter.id,
+            durationMs: run.durationMs,
+            error: run.error,
+          },
+        }).catch(() => {});
+        continue;
+      }
+      const reply = await request(`/api/rooms/${encodeURIComponent(room)}/messages`, {
+        method: 'POST',
+        body: {
+          text: run.text.trim(),
+          replyTo: message.id,
+          chainId: prepared.chainId,
+          hop: prepared.hop,
+          meta: { edge: true, adapter: prepared.adapter.id, durationMs: run.durationMs },
+        },
+      });
+      await request(`/api/agents/${tag}/runs`, {
+        method: 'POST',
+        body: {
+          roomId: prepared.roomId,
+          triggerMsgId: message.id,
+          chainId: prepared.chainId,
+          hop: prepared.hop,
+          status: 'ok',
+          adapterId: prepared.adapter.id,
+          durationMs: run.durationMs,
+        },
+      }).catch(() => {});
+      if (!JSON_OUT) out(`${green('已回帖')} #${reply.message.id}（${run.durationMs}ms）`);
+    }
+    if (FLAGS.once) return;
+  }
+}
+
+async function cmdDiscuss() {
+  needAuth();
+  const topic = String(FLAGS.topic ?? ARGS[1] ?? '');
+  if (!topic) die('用法：ah discuss "主题" --with @codex-1,@claude-1 [--rounds 2]');
+  const room = await currentRoom();
+  const tags = String(FLAGS.with ?? FLAGS.tags ?? '')
+    .split(',')
+    .map((s) => s.trim().replace(/^@/, ''))
+    .filter(Boolean);
+  const res = await request(`/api/rooms/${encodeURIComponent(room)}/discuss`, {
+    method: 'POST',
+    body: { topic, tags, rounds: Number(FLAGS.rounds ?? 2) },
+  });
+  if (JSON_OUT) return out(res);
+  out(`${green('讨论已启动')}：「${topic}」参与者 ${tags.map((t) => `@${t}`).join('、') || '（房间内全部 AI）'}，${FLAGS.rounds ?? 2} 轮`);
+  out(dim(`用 ah tail --room ${room} 实时查看讨论过程`));
+}
+
+async function cmdControl() {
+  needAuth();
+  const action = String(FLAGS.action ?? ARGS[1] ?? '');
+  if (!['pause', 'resume', 'stop'].includes(action)) die('用法：ah control pause|resume|stop [--room general]');
+  const room = await currentRoom();
+  const res = await request(`/api/rooms/${encodeURIComponent(room)}/control`, {
+    method: 'POST',
+    body: { action },
+  });
+  return out(JSON_OUT ? res : `${green('已执行')} ${action} @ ${room}`);
+}
+
+async function cmdHealth() {
+  const res = await request('/api/health', { auth: false });
+  if (JSON_OUT) return out(res);
+  out(
+    `${green('AgentHub 服务正常')} v${res.version}｜Node ${res.node}｜${res.platform}\n` +
+      `适配器：\n${res.adapters
+        .map((a) => `  ${a.available ? green('✔') : red('✘')} ${a.id.padEnd(18)} ${dim(a.detail)}`)
+        .join('\n')}`,
+  );
+}
+
+async function cmdAdapters() {
+  const res = await request('/api/adapters', { auth: false });
+  if (JSON_OUT) return out(res);
+  out(
+    res.adapters
+      .map(
+        (a) =>
+          `${a.available ? green('✔') : red('✘')} ${bold(a.id)}（${a.label}）\n  ${dim(a.description ?? '')}\n  ${dim(a.probeDetail ?? '')}`,
+      )
+      .join('\n'),
+  );
+}
+
+async function cmdStatus() {
+  const res = await request('/api/status', { auth: false });
+  out(res);
+}
+
+/* -------------------------------- 分发 -------------------------------- */
+
+const table = {
+  help: async () => out(HELP),
+  register: cmdRegister,
+  login: cmdLogin,
+  whoami: cmdWhoami,
+  rooms: cmdRooms,
+  room: cmdRoom,
+  send: cmdSend,
+  history: cmdHistory,
+  tail: cmdTail,
+  files: cmdFiles,
+  agent: cmdAgent,
+  discuss: cmdDiscuss,
+  control: cmdControl,
+  health: cmdHealth,
+  adapters: cmdAdapters,
+  status: cmdStatus,
+};
+
+const handler = table[COMMAND];
+if (!handler) {
+  process.stderr.write(red(`未知命令 ${COMMAND}\n\n`));
+  out(HELP);
+  process.exit(1);
+}
+await handler();

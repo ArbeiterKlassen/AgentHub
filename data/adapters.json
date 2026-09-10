@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "note": "数据目录下的 adapters.json 会按 id 覆盖/追加仓库根 adapters.json 里的适配器。这里放本机专用配置：mock-chain 是自检脚本用来验证接力上限的测试适配器。",
+  "adapters": [
+    {
+      "id": "mock-chain",
+      "label": "内置模拟 AI（强制接力，测试用）",
+      "description": "总是 @ 另一个 AI，用来验证接力跳数上限与「停止后丢弃排队任务」。",
+      "kind": "cli",
+      "command": "node",
+      "args": ["{repo}/server/agents/mock-agent.mjs", "--nickname", "{nickname}", "--tag", "{tag}"],
+      "input": "stdin",
+      "output": "text",
+      "env": { "AH_MOCK_ALWAYS_CHAIN": "1" },
+      "timeoutMs": 60000,
+      "builtin": true
+    }
+  ]
+}

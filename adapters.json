@@ -1,0 +1,140 @@
+{
+  "version": 1,
+  "note": "AI CLI 适配器预设表。新增一种 CLI 只要在这里加一条；也可以在数据目录放 adapters.json 覆盖本条（同名 id 覆盖，不同名则追加）。",
+  "placeholders": {
+    "{prompt}": "本轮提示词全文（仅 input=arg 时使用，需自行保证转义）",
+    "{promptFile}": "本轮提示词临时文件路径（UTF-8）",
+    "{outputFile}": "期望 CLI 写入最终回答的文件路径（配合 output=file 使用）",
+    "{cwd}": "该 AI 成员的工作目录",
+    "{repo}": "AgentHub 仓库根目录",
+    "{tag}": "AI 成员登录 tag",
+    "{nickname}": "AI 成员昵称",
+    "{room}": "房间名",
+    "{images}": "本条消息附带的图片：按适配器的 images.flag 展开成 -i <图片> 这样的一组参数（没有图片时展开为空）"
+  },
+  "adapters": [
+    {
+      "id": "mock",
+      "label": "内置模拟 AI（离线演示）",
+      "description": "不依赖任何外部服务的假 AI，用于离线演示、联调和自动化测试。",
+      "kind": "cli",
+      "command": "node",
+      "args": ["{repo}/server/agents/mock-agent.mjs", "--nickname", "{nickname}", "--tag", "{tag}"],
+      "input": "stdin",
+      "output": "text",
+      "timeoutMs": 60000,
+      "builtin": true
+    },
+    {
+      "id": "mock-chain",
+      "label": "内置模拟 AI（强制接力，自检用）",
+      "description": "总是 @ 另一个 AI，用来验证「接力跳数上限」与「链停止后丢弃排队任务」这两条闸门。",
+      "kind": "cli",
+      "command": "node",
+      "args": ["{repo}/server/agents/mock-agent.mjs", "--nickname", "{nickname}", "--tag", "{tag}"],
+      "input": "stdin",
+      "output": "text",
+      "env": { "AH_MOCK_ALWAYS_CHAIN": "1" },
+      "timeoutMs": 60000,
+      "builtin": true
+    },
+    {
+      "id": "codex",
+      "label": "Codex CLI",
+      "description": "OpenAI Codex CLI（codex exec）。以非交互模式运行，最终回答写入临时文件后回帖。",
+      "kind": "cli",
+      "command": "codex",
+      "args": [
+        "exec",
+        "--skip-git-repo-check",
+        "--color",
+        "never",
+        "-C",
+        "{cwd}",
+        "-o",
+        "{outputFile}",
+        "{images}"
+      ],
+      "input": "stdin",
+      "output": "file",
+      "images": { "flag": "-i", "max": 4, "maxBytes": 8388608 },
+      "timeoutMs": 900000,
+      "probe": ["--version"]
+    },
+    {
+      "id": "claude",
+      "label": "Claude Code CLI",
+      "description": "Anthropic Claude Code（claude -p）。提示词通过 stdin 传入，输出为纯文本。",
+      "kind": "cli",
+      "command": "claude",
+      "args": ["-p", "--output-format", "text"],
+      "input": "stdin",
+      "output": "text",
+      "images": { "flag": "--image", "max": 4, "maxBytes": 8388608 },
+      "timeoutMs": 900000,
+      "probe": ["--version"]
+    },
+    {
+      "id": "deepseek-harness",
+      "label": "DeepSeek Harness",
+      "description": "DeepSeek Harness CLI 预设模板。若你本机的子命令/参数不同，改这里即可（默认按 --prompt-file 传提示词）。",
+      "kind": "cli",
+      "command": "deepseek",
+      "args": ["harness", "chat", "--prompt-file", "{promptFile}"],
+      "input": "file",
+      "output": "text",
+      "timeoutMs": 900000,
+      "probe": ["--version"],
+      "unverified": true
+    },
+    {
+      "id": "zcode",
+      "label": "ZCode",
+      "description": "ZCode CLI 预设模板。提示词写入临时文件后以其路径作为参数传入。",
+      "kind": "cli",
+      "command": "zcode",
+      "args": ["chat", "--prompt-file", "{promptFile}"],
+      "input": "file",
+      "output": "text",
+      "timeoutMs": 900000,
+      "probe": ["--version"],
+      "unverified": true
+    },
+    {
+      "id": "gemini",
+      "label": "Gemini CLI",
+      "description": "Google Gemini CLI（gemini -p）。提示词作为参数传入。",
+      "kind": "cli",
+      "command": "gemini",
+      "args": ["-p", "{prompt}"],
+      "input": "arg",
+      "output": "text",
+      "timeoutMs": 900000,
+      "probe": ["--version"],
+      "unverified": true
+    },
+    {
+      "id": "ollama",
+      "label": "本地 Ollama / OpenAI 兼容接口",
+      "description": "直接走 HTTP 的 OpenAI Chat Completions 协议，不启动进程。默认指向本机 Ollama，可改成任意兼容服务。",
+      "kind": "http",
+      "endpoint": "http://127.0.0.1:11434/v1/chat/completions",
+      "model": "deepseek-r1:8b",
+      "apiKey": "",
+      "images": { "mode": "openai", "max": 3, "maxBytes": 8388608 },
+      "timeoutMs": 600000
+    },
+    {
+      "id": "custom",
+      "label": "自定义命令（模板）",
+      "description": "任意 CLI 的通用模板：把 command/args 改成你自己的命令即可，提示词默认以文件路径形式传入。",
+      "kind": "cli",
+      "command": "your-ai-cli",
+      "args": ["--prompt-file", "{promptFile}"],
+      "input": "file",
+      "output": "text",
+      "timeoutMs": 900000,
+      "disabled": true
+    }
+  ]
+}
