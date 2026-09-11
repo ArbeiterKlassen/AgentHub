@@ -85,7 +85,14 @@ export interface RegisterInput {
 }
 
 export const apiClient = {
-  health: () => api<{ ok: boolean; node: string; version: string; adapters: AdapterInfo[] }>('/api/health', { auth: false }),
+  health: () =>
+    api<{
+      ok: boolean;
+      node: string;
+      version: string;
+      adapters: AdapterInfo[];
+      lanUrls?: string[];
+    }>('/api/health', { auth: false }),
 
   register: (input: RegisterInput) =>
     api<{ member: Member; token: string }>('/api/register', { method: 'POST', body: input, auth: false }),

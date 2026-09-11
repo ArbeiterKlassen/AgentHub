@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import express from 'express';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { HOST, PORT, WEB_DIST, DATA_DIR, ensureDirs, REPO_ROOT } from './env.js';
+import { HOST, PORT, WEB_DIST, DATA_DIR, ensureDirs, lanAddresses, REPO_ROOT } from './env.js';
 import { buildApiRouter, serveWeb } from './api.js';
 import { authMiddleware, extractToken } from './auth.js';
 import { findMemberByToken, getDb, listRooms, listRoomMemberTags, isRoomMember } from './db.js';
@@ -157,36 +157,21 @@ setInterval(() => {
   }
 }, 30_000).unref();
 
-server.on('error', (err: NodeJS.ErrnoException) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error('');
-    console.error(`  ✗ 端口 ${PORT} 已被占用：很可能已经有一个 AgentHub 在跑。`);
-    console.error(`    · 直接用已有实例：http://127.0.0.1:${PORT}`);
-    console.error(`    · 或换个端口启动：AH_PORT=8888 npm run dev`);
-    console.error('');
-    process.exit(1);
-  }
-  throw err;
-});
-
 server.listen(PORT, HOST, () => {
   const adapters = loadAdapters().filter((a) => !a.disabled);
-  const lan = (() => {
-    try {
-      const nets = os.networkInterfaces();
-      for (const list of Object.values(nets)) {
-        for (const net of list ?? []) {
-          if (net.family === 'IPv4' && !net.internal) return net.address;
-        }
-      }
-    } catch {
-      /* ignore */
-    }
-    return null;
-  })();
+  const lans = lanAddresses();
   console.log('');
   console.log('  AgentHub 服务已启动');
-  console.log(`  ├─ 本机地址   http://127.0.0.1:${PORT}${lan ? `  （局域网 http://${lan}:${PORT}）` : ''}`);
+  console.log(`  ├─ 本机地址   http://127.0.0.1:${PORT}`);
+  if (lans.length) {
+    const first = lans[0];
+    console.log(`  ├─ 手机访问   http://${first.address}:${PORT}   （${first.iface}）`);
+    for (const extra of lans.slice(1, 4)) {
+      console.log(`  │             http://${extra.address}:${PORT}   （${extra.iface}）`);
+    }
+  } else {
+    console.log('  ├─ 手机访问   未发现局域网地址（可能只有回环网卡）');
+  }
   console.log(`  ├─ WebSocket  ws://127.0.0.1:${PORT}/ws?token=<你的 token>`);
   console.log(`  ├─ 数据目录   ${DATA_DIR}`);
   console.log(`  ├─ 适配器     ${adapters.map((a) => a.id).join(', ')}`);

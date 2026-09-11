@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -34,6 +35,34 @@ export function ensureDirs(): void {
   for (const dir of [DATA_DIR, FILES_DIR, TMP_DIR]) {
     fs.mkdirSync(dir, { recursive: true });
   }
+}
+
+export interface LanAddress {
+  address: string;
+  iface: string;
+}
+
+/**
+ * 列出可供手机/别的设备访问的 IPv4 地址。
+ * 排除回环与 169.254 链路本地；VMware / Hyper-V / WSL / Docker 之类的虚拟网卡排在后面，
+ * 因为「第一个网卡」经常是虚拟网卡（本机就是 VMware 的 192.168.175.1），会让手机连错地址。
+ */
+export function lanAddresses(): LanAddress[] {
+  const virtualHint = /vmware|virtualbox|hyper-?v|vethernet|tailscale|zerotier|docker|wsl|loopback|蓝牙|bluetooth/i;
+  const found: LanAddress[] = [];
+  for (const [iface, list] of Object.entries(os.networkInterfaces())) {
+    for (const net of list ?? []) {
+      if (net.family !== 'IPv4' || net.internal) continue;
+      if (net.address.startsWith('169.254.')) continue;
+      found.push({ address: net.address, iface });
+    }
+  }
+  return found.sort((a, b) => {
+    const av = virtualHint.test(a.iface) ? 1 : 0;
+    const bv = virtualHint.test(b.iface) ? 1 : 0;
+    if (av !== bv) return av - bv;
+    return a.address.localeCompare(b.address);
+  });
 }
 
 export const ROOM_DEFAULTS = {

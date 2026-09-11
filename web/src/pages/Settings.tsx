@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Check, Copy, Eye, EyeOff, KeyRound, Loader2, Moon, RefreshCw, Sun, Trash2 } from 'lucide-react';
+import { Check, Copy, Eye, EyeOff, KeyRound, Loader2, Moon, RefreshCw, Smartphone, Sun, Trash2 } from 'lucide-react';
 import { apiClient, resolveServer } from '@/lib/api';
 import { useSessionStore } from '@/stores/session';
 import { useUiStore } from '@/stores/ui';
@@ -40,6 +40,14 @@ export function SettingsPage() {
   const [showToken, setShowToken] = useState(false);
   const [testing, setTesting] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  const [lanUrls, setLanUrls] = useState<string[]>([]);
+
+  useEffect(() => {
+    apiClient
+      .health()
+      .then((res) => setLanUrls(res.lanUrls ?? []))
+      .catch(() => setLanUrls([]));
+  }, []);
   const [avatarDraft, setAvatarDraft] = useState(member?.avatar ?? '🙂');
   const [savingAvatar, setSavingAvatar] = useState(false);
 
@@ -197,6 +205,33 @@ export function SettingsPage() {
               </Button>
             </div>
             <p className="text-[11px] text-muted-foreground">当前生效：{resolveServer(server)}</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Smartphone className="h-4 w-4" />
+              手机 / 局域网访问
+            </CardTitle>
+            <CardDescription>
+              同一个 WiFi 下用手机浏览器打开下面的地址即可（前端已做手机端适配，可「添加到主屏幕」当 App 用）。
+              列表里可能包含虚拟网卡（VMware / Hyper-V），优先选 WLAN / 以太网 那个。跨网访问请用你自己的内网穿透地址。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-1.5">
+            {lanUrls.length === 0 && <p className="text-sm text-muted-foreground">没有检测到局域网地址。</p>}
+            {lanUrls.map((url) => (
+              <div key={url} className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5">
+                <code className="min-w-0 flex-1 truncate text-xs">{url}</code>
+                <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => void copy(url, url)}>
+                  {copied === url ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                </Button>
+              </div>
+            ))}
+            <p className="pt-1 text-[11px] text-muted-foreground">
+              连不上时先在电脑上确认端口放行：Windows 防火墙需要允许 Node.js 的「专用网络」入站。
+            </p>
           </CardContent>
         </Card>
 

@@ -56,7 +56,7 @@ import {
 } from './orchestrator.js';
 import { parseMentions } from './prompt.js';
 import { sha256 } from './db.js';
-import { REPO_ROOT } from './env.js';
+import { PORT, REPO_ROOT, lanAddresses } from './env.js';
 
 type Handler = (req: Request, res: Response) => unknown | Promise<unknown>;
 
@@ -768,6 +768,7 @@ export function buildApiRouter(): Router {
         node: process.version,
         dataDir: path.join(REPO_ROOT, 'data'),
         adapters: probes,
+        lanUrls: lanAddresses().map((l) => `http://${l.address}:${PORT}`),
       };
     }),
   );
