@@ -20,7 +20,21 @@ const flag = (name, fallback = null) => {
   return next && !next.startsWith('--') ? next : true;
 };
 const PORT = Number(process.env.AH_PORT ?? 8787);
-const WANT_HTTPS = Boolean(flag('https', Boolean(process.env.AH_TLS_CERT)));
+/**
+ * 协议选择：
+ *   --http            强制明文 HTTP（内网穿透自带 TLS 时用）
+ *   --https           强制 HTTPS（证书不存在会现场生成）
+ *   都没给            有证书就用 HTTPS，没证书就用 HTTP
+ * 这样「桌面图标」与「Cloudflare Tunnel 的 https 源」默认就是一致的，不会再出现
+ * 服务跑 HTTP、隧道按 HTTPS 连 → 502 这种坑。
+ */
+const FORCE_HTTP = Boolean(flag('http', false));
+const TLS_DIR = path.join(process.env.AH_DATA_DIR ?? path.join(REPO, 'data'), 'tls');
+const CERT_FILE = path.join(TLS_DIR, 'cert.pem');
+const KEY_FILE = path.join(TLS_DIR, 'key.pem');
+const CERT_EXISTS = fs.existsSync(CERT_FILE) && fs.existsSync(KEY_FILE);
+const EXPLICIT_HTTPS = Boolean(flag('https', false));
+const WANT_HTTPS = FORCE_HTTP ? false : EXPLICIT_HTTPS || Boolean(process.env.AH_TLS_CERT) || CERT_EXISTS;
 let SCHEME = WANT_HTTPS ? 'https' : 'http';
 const URL = () => `${SCHEME}://127.0.0.1:${PORT}`;
 
@@ -92,10 +106,7 @@ if (!fs.existsSync(path.join(REPO, 'server', 'dist', 'index.js'))) {
 
 // 2.5 要 HTTPS 就确保证书存在（没有就现场生成一张自签的）
 if (WANT_HTTPS) {
-  const tlsDir = path.join(process.env.AH_DATA_DIR ?? path.join(REPO, 'data'), 'tls');
-  const certPath = path.join(tlsDir, 'cert.pem');
-  const keyPath = path.join(tlsDir, 'key.pem');
-  if (!fs.existsSync(certPath) || !fs.existsSync(keyPath)) {
+  if (!CERT_EXISTS) {
     console.log(c.yellow('  [提示] 还没有 HTTPS 证书，正在生成自签证书（有效期 3 年）…'));
     const code = await new Promise((resolve) => {
       const child = spawn(process.execPath, [path.join(REPO, 'scripts', 'make-cert.mjs')], {
@@ -110,19 +121,23 @@ if (WANT_HTTPS) {
       SCHEME = 'http';
     }
   }
-  if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
-    process.env.AH_TLS_CERT = certPath;
-    process.env.AH_TLS_KEY = keyPath;
+  if (fs.existsSync(CERT_FILE) && fs.existsSync(KEY_FILE)) {
+    process.env.AH_TLS_CERT = CERT_FILE;
+    process.env.AH_TLS_KEY = KEY_FILE;
     // 自签证书，本机自检不需要校验证书链
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
     console.log(c.green('  [HTTPS] 已启用自签证书；手机首次打开会提示「不安全」，点继续即可。'));
-    console.log(c.dim(`         想让提示消失：把 ${certPath} 装到手机的受信任凭据里。`));
+    console.log(c.dim(`         想让提示消失：把 ${CERT_FILE} 装到手机的受信任凭据里。`));
+    console.log(c.dim('         想改用明文 HTTP：start-agenthub.bat --http'));
     console.log('');
+  } else {
+    console.log(c.yellow('  [提示] 未找到证书，按 HTTP 启动。'));
   }
 }
 
 // 3. 前台运行守护进程：Ctrl+C 即可停止
 console.log(`  服务地址   ${c.cyan(URL())}`);
+console.log(c.dim(`  启动模式   ${SCHEME.toUpperCase()}${WANT_HTTPS && CERT_EXISTS && !EXPLICIT_HTTPS ? '（检测到证书自动选择；加 --http 可强制明文）' : ''}`));
 console.log(`  ${c.yellow('停止服务')}   在这个窗口按 Ctrl+C`);
 console.log(`  ${c.yellow('关闭窗口')}   直接点右上角 X（等于停止服务）`);
 console.log('');
