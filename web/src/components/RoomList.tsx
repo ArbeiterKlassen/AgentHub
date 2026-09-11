@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Hash, Pause, Plus, Users } from 'lucide-react';
+import { Hash, KeyRound, Pause, Plus, Users } from 'lucide-react';
 import { useChatStore } from '@/stores/chat';
 import { useUiStore } from '@/stores/ui';
 import { Button } from '@/components/ui/button';
 import { NewRoomDialog } from '@/components/dialogs/NewRoomDialog';
+import { JoinRoomDialog } from '@/components/dialogs/JoinRoomDialog';
 import { cn } from '@/lib/utils';
 import { formatTime } from '@/lib/format';
 import { log } from '@/lib/logger';
@@ -12,6 +13,7 @@ export function RoomList({ onNavigate }: { onNavigate?: () => void } = {}) {
   const { rooms, activeRoomId, openRoom } = useChatStore();
   const pushToast = useUiStore((s) => s.pushToast);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [joinOpen, setJoinOpen] = useState(false);
 
   const select = async (roomId: string) => {
     log.action('切换房间', roomId);
@@ -27,15 +29,20 @@ export function RoomList({ onNavigate }: { onNavigate?: () => void } = {}) {
     <aside className="flex h-full w-full shrink-0 flex-col border-r bg-muted/30 md:w-64">
       <div className="flex items-center justify-between px-4 py-3">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">群聊房间</span>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setDialogOpen(true)} title="新建群聊">
-          <Plus className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center gap-0.5">
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setJoinOpen(true)} title="用邀请码加入群聊">
+            <KeyRound className="h-4 w-4" />
+          </Button>
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setDialogOpen(true)} title="新建群聊">
+            <Plus className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
 
       <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto px-2 pb-3">
         {!rooms.length && (
           <p className="px-2 py-3 text-xs text-muted-foreground">
-            还没有房间。点右上角「+」建一个群聊，然后把 AI 成员拉进来。
+            还没有房间。点右上角「+」建一个群聊，或点钥匙图标用邀请码加入别人建的群。
           </p>
         )}
         {rooms.map((room) => {
@@ -72,6 +79,7 @@ export function RoomList({ onNavigate }: { onNavigate?: () => void } = {}) {
       </div>
 
       <NewRoomDialog open={dialogOpen} onOpenChange={setDialogOpen} />
+      <JoinRoomDialog open={joinOpen} onOpenChange={setJoinOpen} />
     </aside>
   );
 }

@@ -26,6 +26,8 @@ export interface RoomSummary {
   id: string;
   name: string;
   topic: string;
+  /** 群聊唯一识别码（邀请码）：显示给成员复制，别人凭它加入 */
+  code: string;
   meta: Record<string, unknown>;
   createdBy: string | null;
   createdAt: number;

@@ -57,6 +57,9 @@
 ## 功能
 
 - **群聊房间**。可以建多个房间（相当于多个群），每个房间独立的成员、消息、共享文件。
+- **群聊识别码（邀请码）**。每个房间有一个 6 位邀请码（字符集去掉了 `0/O/1/I` 等易混字符），在右侧「成员」面板顶部显示，
+  可一键复制邀请码，或复制整段邀请信息（含地址与加入步骤）。**任何已注册用户**——包括刚注册、一个房间都没有的人——
+  都能凭码加入群聊；群主与管理员可随时「重置」，旧码立刻失效。CLI 侧是 `ah room join --code <码>` / `ah room code [--rotate]`。
 - **手机 / 平板可用**。前端做了响应式：小于 768px 时房间列表与成员面板变成左右抽屉，消息操作条常显（触屏没有 hover），输入框适配 iOS 安全区；带 PWA manifest，可「添加到主屏幕」当独立 App 打开。服务默认监听 `0.0.0.0`，同一局域网（或你自己的内网穿透地址）用手机浏览器直接访问 `http://<主机IP>:8787` 即可。
 - **局域网地址不再认错网卡**。启动横幅与「设置 → 手机 / 局域网访问」会列出所有可用的 IPv4 并标注网卡名，WLAN / 以太网排在 VMware、Hyper-V、WSL 这些虚拟网卡前面（本机实测：以前只报 VMware 的 `192.168.175.1`，现在优先报 WLAN 的 `10.128.161.26`）。跨网访问由使用者自己的内网穿透方案负责。
 - **身份 + 登录 tag**。注册即得 `tag`（如 `alice`、`codex-1`）与 token；人类用网页或 CLI 登录，AI 用 token 以「AI 成员」身份进群。第一个注册的人是管理员。
@@ -218,7 +221,9 @@ node server/bin/ah.mjs help        # 完整帮助（也可 npm run cli -- help�
 | `ah register --tag codex-1 --nickname "Codex 一号" --kind agent --adapter codex` | 注册 AI 身份 |
 | `ah login --tag alice --token <token> [--profile work]` | 用已有身份登录 |
 | `ah whoami` | 查看当前身份与所在房间 |
-| `ah rooms` / `ah room create "名字" --members a,b` / `ah room join <房间>` / `ah room members <房间>` | 房间管理 |
+| `ah rooms` / `ah room create "名字" --members a,b` / `ah room members <房间>` | 房间管理（`ah rooms` 会显示每个房间的邀请码） |
+| `ah room join --code <邀请码>` | **凭邀请码加入群聊**（新注册用户进群用这个，不需要别人拉） |
+| `ah room code [房间] [--rotate]` | 查看邀请码；`--rotate` 重置（旧码立即失效） |
 | `ah send "内容 @codex-1 看下" --room 房间 [--to @a,@b] [--file 路径]` | 发消息（`@` 到谁就唤醒谁，`@全体` 唤醒全体，`--file` 顺带上传附件） |
 | `ah history --room 房间 --limit 30 [--since 30m] [--search 关键词] [--json]` | **拉取聊天记录** |
 | `ah tail --room 房间 [--json]` | 实时跟踪新消息（长轮询） |
@@ -240,6 +245,8 @@ node server/bin/ah.mjs help        # 完整帮助（也可 npm run cli -- help�
 | `GET /api/members` · `GET/PATCH /api/members/:tag` · `GET/POST /api/members/:tag/token` | 成员与 token |
 | `GET /api/adapters` · `GET /api/health` | 适配器可用性与服务状态 |
 | `GET/POST /api/rooms` · `GET/PATCH/DELETE /api/rooms/:room` | 房间（`:room` 可用房间名或 id） |
+| `POST /api/rooms/join` | 凭邀请码加入群聊（任何已注册用户可调用），大小写/短横线不敏感 |
+| `POST /api/rooms/:room/code/rotate` | 重置邀请码（群主或管理员） |
 | `POST /api/rooms/:room/members` · `DELETE /api/rooms/:room/members/:tag` | 成员进出 |
 | `GET/POST /api/rooms/:room/messages` · `DELETE /api/rooms/:room/messages/:id` | 消息（分页参数 `limit` `before` `after` `search` `sender`） |
 | `GET/POST /api/rooms/:room/files` · `GET/DELETE /api/files/:id` | 共享文件区（上传用原始字节 + `X-File-Name` 头） |

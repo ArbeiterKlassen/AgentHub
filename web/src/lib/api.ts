@@ -124,6 +124,19 @@ export const apiClient = {
   createRoom: (input: { name: string; topic?: string; members?: string[] }) =>
     api<{ room: RoomSummary }>('/api/rooms', { method: 'POST', body: input }),
 
+  /** 用邀请码加入群聊（任何已注册用户都能调） */
+  joinRoomByCode: (code: string) =>
+    api<{ ok: boolean; alreadyMember: boolean; room: RoomSummary }>('/api/rooms/join', {
+      method: 'POST',
+      body: { code },
+    }),
+
+  rotateRoomCode: (roomId: string) =>
+    api<{ ok: boolean; roomId: string; code: string }>(
+      `/api/rooms/${encodeURIComponent(roomId)}/code/rotate`,
+      { method: 'POST' },
+    ),
+
   patchRoom: (roomId: string, patch: Record<string, unknown>) =>
     api<{ room: RoomSummary }>(`/api/rooms/${encodeURIComponent(roomId)}`, { method: 'PATCH', body: patch }),
 

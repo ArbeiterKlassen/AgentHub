@@ -20,6 +20,13 @@ const argValue = (name, fallback) => {
   return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback;
 };
 const SERVER = argValue('server', process.env.AH_SERVER ?? 'http://127.0.0.1:8787').replace(/\/+$/, '');
+// 服务可能跑在自签 HTTPS 上（start-agenthub.bat --https）：本机地址或显式 AH_INSECURE=1 时跳过证书校验
+if (
+  /^https:/i.test(SERVER) &&
+  (process.env.AH_INSECURE === '1' || /\/\/(127\.0\.0\.1|localhost)(:|\/|$)/i.test(SERVER))
+) {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+}
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RUN = Date.now().toString(36).slice(-4);
 const ROOM = `e2e-${RUN}`;
@@ -348,6 +355,65 @@ async function run() {
     '图片会作为图像输入写进提示词（codex -i 链路）',
     Boolean(imagePrompt && imagePrompt.prompt.includes('e2e-image.png')),
     imagePrompt ? '提示词含【本次附带图像】' : '未在运行记录里找到',
+  );
+
+  /* 14. 邀请码：显示 + 新用户凭码加入 + 权限边界 */
+  const roomDetail = await api(`/api/rooms/${ROOM}`, { token: tokens[alice] });
+  const roomCode = roomDetail.data.room?.code ?? '';
+  check('房间有唯一邀请码', /^[0-9A-Z]{6}$/.test(roomCode), roomCode);
+
+  const newbieTag = `newbie-${suffix}`;
+  const newbie = await api('/api/register', {
+    method: 'POST',
+    body: { tag: newbieTag, nickname: '新同学' },
+  });
+  const beforeJoin = await api('/api/rooms', { token: newbie.data.token });
+  check('新用户初始没有任何房间', (beforeJoin.data.rooms ?? []).length === 0);
+
+  // 故意用小写 + 短横线，验证归一化
+  const joinedRoom = await api('/api/rooms/join', {
+    method: 'POST',
+    token: newbie.data.token,
+    body: { code: `${roomCode.slice(0, 3)}-${roomCode.slice(3)}`.toLowerCase() },
+  });
+  check(
+    '新用户凭邀请码加入群聊（大小写/短横线不敏感）',
+    joinedRoom.ok && joinedRoom.data.room?.id === roomDetail.data.room.id,
+    joinedRoom.data.room?.name ?? joinedRoom.data.error,
+  );
+
+  const afterJoin = await api('/api/rooms', { token: newbie.data.token });
+  check('加入后能在自己的房间列表里看到它', (afterJoin.data.rooms ?? []).length === 1);
+
+  const readable = await api(`/api/rooms/${ROOM}/messages?limit=3`, { token: newbie.data.token });
+  check('加入后可以读取该群消息', readable.ok && Array.isArray(readable.data.messages));
+
+  const badCode = await api('/api/rooms/join', {
+    method: 'POST',
+    token: newbie.data.token,
+    body: { code: 'ZZZZZZ' },
+  });
+  check('无效邀请码返回 404 且有可读提示', badCode.status === 404, badCode.data.error ?? '');
+
+  const rotateByOther = await api(`/api/rooms/${ROOM}/code/rotate`, {
+    method: 'POST',
+    token: newbie.data.token,
+  });
+  check('非群主不能重置邀请码（403）', rotateByOther.status === 403);
+
+  const rotated = await api(`/api/rooms/${ROOM}/code/rotate`, {
+    method: 'POST',
+    token: tokens[alice],
+  });
+  const oldCodeGone = await api('/api/rooms/join', {
+    method: 'POST',
+    token: newbie.data.token,
+    body: { code: roomCode },
+  });
+  check(
+    '群主重置后旧码失效、新码可用',
+    rotated.ok && rotated.data.code !== roomCode && oldCodeGone.status === 404,
+    `${roomCode} → ${rotated.data.code}`,
   );
 }
 

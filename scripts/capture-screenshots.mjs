@@ -64,6 +64,7 @@ if (flag('launch', false)) {
       `--remote-debugging-port=${CDP_PORT}`,
       `--user-data-dir=${path.join(process.env.TEMP ?? '.', `agenthub-shot-${Date.now().toString(36)}`)}`,
       '--headless=new',
+      '--ignore-certificate-errors',
       '--disable-gpu',
       '--no-first-run',
       `--window-size=${WIDTH},${HEIGHT}`,
@@ -200,6 +201,9 @@ if (ROOM) {
   })()`);
 }
 await sleep(2500);
+// 面板默认停在「成员」标签，这样截图里能带上群聊识别码（邀请码）卡片
+await clickTab('成员');
+await sleep(600);
 
 if (MOBILE) {
   // 手机端：聊天主界面 → 房间抽屉 → 成员/文件抽屉

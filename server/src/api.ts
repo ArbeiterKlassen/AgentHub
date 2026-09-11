@@ -6,11 +6,14 @@ import {
   deleteMember,
   findMember,
   findRoom,
+  findRoomByCode,
   findRoomByName,
+  generateRoomCode,
   getDb,
   getFile,
   getMessage,
   getRun,
+  insertRoom,
   isRoomMember,
   listMembers,
   listMessages,
@@ -23,6 +26,7 @@ import {
   now,
   parseJson,
   removeRoomMember,
+  rotateRoomCode,
   roomMessageCount,
   updateMember,
   updateRoom,
@@ -282,6 +286,8 @@ export function buildApiRouter(): Router {
       id: room.id,
       name: room.name,
       topic: room.topic,
+      // 群聊唯一识别码（邀请码）：给成员显示/复制，别人用它加入
+      code: room.code,
       meta: { ...DEFAULT_ROOM_META, ...parseJson<Record<string, unknown>>(room.meta, {}) },
       createdBy: room.created_by,
       createdAt: room.created_at,
@@ -329,16 +335,19 @@ export function buildApiRouter(): Router {
         created_by: me.tag,
         meta: JSON.stringify({ ...DEFAULT_ROOM_META, ...(body.meta ?? {}) }),
         created_at: now(),
+        code: generateRoomCode(),
       };
       const db = getDb();
-      db.prepare('INSERT INTO rooms (id, name, topic, created_by, meta, created_at) VALUES (?,?,?,?,?,?)').run(
-        room.id,
-        room.name,
-        room.topic,
-        room.created_by,
-        room.meta,
-        room.created_at,
-      );
+      // 邀请码极小概率撞车，撞了就换一个再插
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          insertRoom(room);
+          break;
+        } catch (err) {
+          if (attempt >= 5) throw err;
+          room.code = generateRoomCode();
+        }
+      }
       addRoomMember(room.id, me.tag, 'owner');
       const extras = Array.isArray(body.members) ? body.members : [];
       for (const tag of extras) {
@@ -370,6 +379,49 @@ export function buildApiRouter(): Router {
           })),
         files: listRoomFiles(room.id, originOf(req)),
       };
+    }),
+  );
+
+  /**
+   * 用邀请码加入群聊：**任何已注册用户都能调用**（这是新用户进群的唯一入口，
+   * 不要求调用者已经是该房间成员）。码大小写不敏感，空格/短横线会被忽略。
+   */
+  api.post(
+    '/rooms/join',
+    wrap((req) => {
+      const me = requireAuth(req);
+      const body = (req.body ?? {}) as { code?: string };
+      const raw = String(body.code ?? '');
+      if (!raw.trim()) throw new HttpError(400, '请填写群聊邀请码');
+      const room = findRoomByCode(raw);
+      if (!room) throw new HttpError(404, `邀请码「${raw.trim()}」无效或已被重置，找群主确认一下`);
+      const already = isRoomMember(room.id, me.tag);
+      if (!already) {
+        addRoomMember(room.id, me.tag, 'member');
+        systemMessage(room.id, `@${me.tag}（${me.nickname}）通过邀请码加入了房间`, {
+          kind: 'member.join',
+          tag: me.tag,
+          via: 'invite-code',
+        });
+      }
+      return { ok: true, alreadyMember: already, room: roomSummary(room, me.tag, req) };
+    }),
+  );
+
+  /** 重置邀请码（群主或管理员）：旧码立即失效 */
+  api.post(
+    '/rooms/:room/code/rotate',
+    wrap((req) => {
+      const room = resolveRoom(req.params.room);
+      const me = requireAuth(req);
+      const isOwner = room.created_by === me.tag;
+      if (!isOwner && me.role !== 'admin') throw new HttpError(403, '只有群主或管理员可以重置邀请码');
+      const code = rotateRoomCode(room.id);
+      systemMessage(room.id, `@${me.tag} 重置了本群邀请码，旧邀请码已失效`, {
+        kind: 'room.code.rotate',
+        level: 'info',
+      });
+      return { ok: true, roomId: room.id, code };
     }),
   );
 

@@ -28,6 +28,8 @@ export interface RoomRow {
   created_by: string | null;
   meta: string;
   created_at: number;
+  /** 群聊邀请码：给人看/复制/手输的短码（新建房间时生成，可重置） */
+  code: string;
 }
 
 export interface MessageRow {
@@ -87,6 +89,7 @@ export function getDb(): DatabaseSync {
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA foreign_keys = ON');
   migrate(db);
+  ensureRoomCodes();
   return db;
 }
 
@@ -117,7 +120,8 @@ function migrate(d: DatabaseSync): void {
       topic      TEXT NOT NULL DEFAULT '',
       created_by TEXT,
       meta       TEXT NOT NULL DEFAULT '{}',
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      code       TEXT
     );
 
     CREATE TABLE IF NOT EXISTS room_members (
@@ -178,6 +182,52 @@ function migrate(d: DatabaseSync): void {
     );
     CREATE INDEX IF NOT EXISTS idx_runs_agent ON agent_runs (agent_tag, created_at);
   `);
+
+  // 老库补 code 列（CREATE TABLE IF NOT EXISTS 不会给已存在的表加列）
+  const cols = d.prepare('PRAGMA table_info(rooms)').all() as unknown as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === 'code')) {
+    d.exec('ALTER TABLE rooms ADD COLUMN code TEXT');
+  }
+  d.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_rooms_code ON rooms (code)');
+}
+
+/** 邀请码字符集：去掉 0/O/1/I 这些看起来像的，方便手输 */
+const CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+export const ROOM_CODE_LENGTH = 6;
+
+export function generateRoomCode(): string {
+  const bytes = crypto.randomBytes(ROOM_CODE_LENGTH);
+  let out = '';
+  for (let i = 0; i < ROOM_CODE_LENGTH; i += 1) {
+    out += CODE_ALPHABET[bytes[i] % CODE_ALPHABET.length];
+  }
+  return out;
+}
+
+/** 用户输入的邀请码归一化：大小写不敏感，忽略空格/短横线等 */
+export function normalizeRoomCode(raw: string): string {
+  return String(raw ?? '')
+    .toUpperCase()
+    .replace(/[^0-9A-Z]/g, '')
+    .slice(0, 32);
+}
+
+/** 给还没邀请码的房间补一个（幂等，启动时调用） */
+export function ensureRoomCodes(): number {
+  const d = getDb();
+  const rows = d
+    .prepare("SELECT id FROM rooms WHERE code IS NULL OR code = ''")
+    .all() as unknown as Array<{ id: string }>;
+  let filled = 0;
+  for (const row of rows) {
+    let code = generateRoomCode();
+    while (d.prepare('SELECT 1 AS ok FROM rooms WHERE code = ?').get(code)) {
+      code = generateRoomCode();
+    }
+    d.prepare('UPDATE rooms SET code = ? WHERE id = ?').run(code, row.id);
+    filled += 1;
+  }
+  return filled;
 }
 
 export const now = (): number => Date.now();
@@ -301,9 +351,9 @@ export function deleteMember(tag: string): void {
 export function insertRoom(row: RoomRow): void {
   getDb()
     .prepare(
-      `INSERT INTO rooms (id, name, topic, created_by, meta, created_at) VALUES (?,?,?,?,?,?)`,
+      `INSERT INTO rooms (id, name, topic, created_by, meta, created_at, code) VALUES (?,?,?,?,?,?,?)`,
     )
-    .run(row.id, row.name, row.topic, row.created_by, row.meta, row.created_at);
+    .run(row.id, row.name, row.topic, row.created_by, row.meta, row.created_at, row.code);
 }
 
 export function findRoom(id: string): RoomRow | undefined {
@@ -312,6 +362,24 @@ export function findRoom(id: string): RoomRow | undefined {
 
 export function findRoomByName(name: string): RoomRow | undefined {
   return getDb().prepare('SELECT * FROM rooms WHERE name = ?').get(name) as RoomRow | undefined;
+}
+
+/** 按邀请码找房间（大小写/分隔符不敏感） */
+export function findRoomByCode(code: string): RoomRow | undefined {
+  const normalized = normalizeRoomCode(code);
+  if (!normalized) return undefined;
+  return getDb().prepare('SELECT * FROM rooms WHERE UPPER(code) = ?').get(normalized) as RoomRow | undefined;
+}
+
+/** 重置邀请码（旧码立即失效） */
+export function rotateRoomCode(id: string): string {
+  const d = getDb();
+  let code = generateRoomCode();
+  while (d.prepare('SELECT 1 AS ok FROM rooms WHERE code = ?').get(code)) {
+    code = generateRoomCode();
+  }
+  d.prepare('UPDATE rooms SET code = ? WHERE id = ?').run(code, id);
+  return code;
 }
 
 export function listRooms(): RoomRow[] {

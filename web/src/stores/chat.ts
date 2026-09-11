@@ -25,6 +25,7 @@ interface ChatState {
   loadRooms: () => Promise<RoomSummary[]>;
   openRoom: (roomId: string) => Promise<void>;
   createRoom: (input: { name: string; topic?: string; members?: string[] }) => Promise<RoomSummary>;
+  joinRoomByCode: (code: string) => Promise<{ room: RoomSummary; alreadyMember: boolean }>;
   refreshRoom: (roomId: string) => Promise<void>;
   send: (text: string, files?: string[], replyTo?: number | null) => Promise<void>;
   upload: (file: File) => Promise<void>;
@@ -96,6 +97,18 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     set((state) => ({ rooms: [...state.rooms, room] }));
     await get().openRoom(room.id);
     return room;
+  },
+
+  /** 用邀请码加入群聊：加入后直接切过去（新用户第一次进群走这条路） */
+  joinRoomByCode: async (code) => {
+    const res = await apiClient.joinRoomByCode(code);
+    set((state) => ({
+      rooms: state.rooms.some((r) => r.id === res.room.id)
+        ? state.rooms.map((r) => (r.id === res.room.id ? res.room : r))
+        : [...state.rooms, res.room],
+    }));
+    await get().openRoom(res.room.id);
+    return { room: res.room, alreadyMember: res.alreadyMember };
   },
 
   refreshRoom: async (roomId) => {

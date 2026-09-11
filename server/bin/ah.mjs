@@ -220,7 +220,9 @@ ${bold('身份')}
 ${bold('房间')}
   ah rooms
   ah room create "设计评审" [--topic "..." ] [--members alice,codex-1]
-  ah room join <房间> --tag <tag>
+  ah room join --code <邀请码>          # 凭邀请码加入（新用户进群用这个）
+  ah room join <房间> --tag <tag>       # 把已有成员拉进房间
+  ah room code [房间] [--rotate]        # 查看/重置邀请码
   ah room members <房间>
 
 ${bold('消息')}
@@ -306,6 +308,7 @@ async function cmdRooms() {
       .map(
         (r) =>
           `${bold(r.name)} ${dim(`(${r.id})`)} ${r.paused ? yellow('[已暂停]') : ''}\n` +
+          `  邀请码 ${cyan(r.code ?? '-')} ${dim('（别人用 ah room join --code 加入）')}\n` +
           `  ${dim(`成员 ${r.memberCount}（AI ${r.agentCount}）｜消息 ${r.messageCount}`)}` +
           `${r.lastMessage ? `\n  最近：${String(r.lastMessage.text).slice(0, 60)}` : ''}`,
       )
@@ -346,8 +349,19 @@ async function cmdRoom() {
     return out(`${green('房间已创建')} ${bold(res.room.name)} ${dim(`(${res.room.id})`)}，当前房间已切换`);
   }
   if (SUB === 'join') {
+    // 用邀请码加入：任何已注册用户都能用（新用户进群就靠它）
+    if (typeof FLAGS.code === 'string') {
+      const res = await request('/api/rooms/join', { method: 'POST', body: { code: FLAGS.code } });
+      if (res.room?.name) saveProfile({ room: res.room.name });
+      if (JSON_OUT) return out(res);
+      return out(
+        res.alreadyMember
+          ? `${green('你已经在房间里了')}：${bold(res.room.name)}`
+          : `${green('已加入房间')} ${bold(res.room.name)} ${dim(`（成员 ${res.room.memberCount}）`)}`,
+      );
+    }
     const room = String(ARGS[2] ?? FLAGS.room ?? '');
-    if (!room) die('用法：ah room join <房间> [--tag <tag>]');
+    if (!room) die('用法：ah room join --code <邀请码>   或   ah room join <房间> --tag <tag>');
     const res = await request(`/api/rooms/${encodeURIComponent(room)}/members`, {
       method: 'POST',
       body: { tag: FLAGS.tag ?? CONFIG.tag },
@@ -355,6 +369,20 @@ async function cmdRoom() {
     saveProfile({ room });
     if (JSON_OUT) return out(res);
     return out(`${green('已加入')} ${room}`);
+  }
+  if (SUB === 'code') {
+    const room = await currentRoom(ARGS[2]);
+    if (FLAGS.rotate) {
+      const res = await request(`/api/rooms/${encodeURIComponent(room)}/code/rotate`, { method: 'POST' });
+      if (JSON_OUT) return out(res);
+      return out(`${green('已重置邀请码')}：${bold(res.code)} ${dim('（旧码立即失效）')}`);
+    }
+    const detail = await request(`/api/rooms/${encodeURIComponent(room)}`);
+    if (JSON_OUT) return out({ room: detail.room.name, code: detail.room.code });
+    return out(
+      `${bold(detail.room.name)} 的邀请码：${bold(detail.room.code)}\n` +
+        dim(`别人这样加入：ah room join --code ${detail.room.code}`),
+    );
   }
   if (SUB === 'members') {
     const room = await currentRoom(ARGS[2]);

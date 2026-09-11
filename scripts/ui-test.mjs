@@ -99,8 +99,9 @@ async function main() {
       [
         `--remote-debugging-port=${PORT}`,
         `--user-data-dir=${profile}`,
-        '--headless=new',
-        '--disable-gpu',
+      '--headless=new',
+      '--ignore-certificate-errors',
+      '--disable-gpu',
         '--no-first-run',
         '--window-size=1440,960',
         'about:blank',

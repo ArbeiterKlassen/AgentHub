@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Hash, Loader2, Menu, Pause, Play, Plus, StopCircle, Upload, Users } from 'lucide-react';
+import { Hash, KeyRound, Loader2, Menu, Pause, Play, Plus, StopCircle, Upload, Users } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 import { useChatStore } from '@/stores/chat';
 import { useSessionStore } from '@/stores/session';
@@ -13,6 +13,7 @@ import { Avatar } from '@/components/Avatar';
 import { Button } from '@/components/ui/button';
 import { NewRoomDialog } from '@/components/dialogs/NewRoomDialog';
 import { AddMemberDialog } from '@/components/dialogs/AddMemberDialog';
+import { JoinRoomDialog } from '@/components/dialogs/JoinRoomDialog';
 import { cn } from '@/lib/utils';
 import { log } from '@/lib/logger';
 import type { ChatMessage } from '@/lib/types';
@@ -37,6 +38,7 @@ export function ChatPage() {
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [newRoomOpen, setNewRoomOpen] = useState(false);
+  const [joinRoomOpen, setJoinRoomOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   // 手机端：房间列表 / 成员面板都做成抽屉，桌面端仍然常驻
   const [roomDrawerOpen, setRoomDrawerOpen] = useState(false);
@@ -109,7 +111,12 @@ export function ChatPage() {
               <Plus className="mr-1 h-4 w-4" />
               新建群聊房间
             </Button>
+            <Button variant="outline" onClick={() => setJoinRoomOpen(true)}>
+              <KeyRound className="mr-1 h-4 w-4" />
+              用邀请码加入群聊
+            </Button>
             <NewRoomDialog open={newRoomOpen} onOpenChange={setNewRoomOpen} />
+            <JoinRoomDialog open={joinRoomOpen} onOpenChange={setJoinRoomOpen} />
           </div>
         ) : (
           <>

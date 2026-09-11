@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import {
   Bot,
+  Copy,
   Download,
   FileText,
   Loader2,
@@ -24,10 +25,10 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AgentLogsDialog } from '@/components/dialogs/AgentLogsDialog';
-import { downloadUrl } from '@/lib/api';
+import { apiClient, downloadUrl } from '@/lib/api';
 import { isImageFile } from '@/lib/fileKind';
 import { formatDateTime, formatSize } from '@/lib/format';
-import { cn } from '@/lib/utils';
+import { cn, copyText } from '@/lib/utils';
 import { log } from '@/lib/logger';
 import { useState } from 'react';
 import type { Member } from '@/lib/types';
@@ -40,7 +41,8 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export function RightPanel({ onClose, onAddMember }: { onClose?: () => void; onAddMember?: () => void } = {}) {
-  const { members, files, loadingRoom, typing } = useChatStore();
+const { members, files, loadingRoom, typing } = useChatStore();
+  const refreshRoom = useChatStore((s) => s.refreshRoom);
   const activeRoomId = useChatStore((s) => s.activeRoomId);
   const room = useChatStore((s) => s.rooms.find((r) => r.id === s.activeRoomId));
   const { rightTab, setRightTab, pushToast, insertToComposer } = useUiStore();
@@ -106,6 +108,63 @@ export function RightPanel({ onClose, onAddMember }: { onClose?: () => void; onA
         <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto p-3">
           <Tabs value={rightTab} onValueChange={(v) => setRightTab(v as typeof rightTab)}>
             <TabsContent value="members" className="mt-0 space-y-1.5">
+              {room?.code && (
+                <div className="rounded-lg border bg-card p-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-muted-foreground">群聊识别码（邀请码）</span>
+                    {(me?.role === 'admin' || room.createdBy === me?.tag) && (
+                      <button
+                        type="button"
+                        className="text-[11px] text-muted-foreground hover:text-destructive"
+                        title="重置邀请码（旧码立即失效）"
+                        onClick={async () => {
+                          try {
+                            await apiClient.rotateRoomCode(room.id);
+                            await refreshRoom(room.id);
+                            pushToast('邀请码已重置，旧码失效', 'success');
+                          } catch (err) {
+                            pushToast(err instanceof Error ? err.message : String(err), 'error');
+                          }
+                        }}
+                      >
+                        重置
+                      </button>
+                    )}
+                  </div>
+                  <div className="mt-1 flex items-center gap-2">
+                    <code className="flex-1 font-mono text-lg font-semibold tracking-[0.25em]">{room.code}</code>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      title="复制邀请码"
+                      onClick={async () => {
+                        await copyText(room.code);
+                        pushToast('邀请码已复制', 'success');
+                      }}
+                    >
+                      <Copy className="h-3 w-3" />
+                      复制
+                    </Button>
+                  </div>
+                  <button
+                    type="button"
+                    className="mt-1.5 w-full rounded border border-dashed px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-accent"
+                    onClick={async () => {
+                      const text = [
+                        `【AgentHub 群聊邀请】${room.name}`,
+                        `邀请码：${room.code}`,
+                        `地址：${window.location.origin}`,
+                        '加入方式：打开地址 → 登录/注册 → 房间列表点钥匙图标 → 填邀请码',
+                      ].join('\n');
+                      await copyText(text);
+                      pushToast('邀请信息已复制，直接发给对方即可', 'success');
+                    }}
+                  >
+                    复制邀请信息（含码 + 地址 + 步骤）
+                  </button>
+                </div>
+              )}
               {onAddMember && (
                 <Button variant="outline" size="sm" className="w-full" onClick={onAddMember}>
                   <UserPlus className="h-3.5 w-3.5" />
