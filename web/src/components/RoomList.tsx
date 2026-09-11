@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils';
 import { formatTime } from '@/lib/format';
 import { log } from '@/lib/logger';
 
-export function RoomList() {
+export function RoomList({ onNavigate }: { onNavigate?: () => void } = {}) {
   const { rooms, activeRoomId, openRoom } = useChatStore();
   const pushToast = useUiStore((s) => s.pushToast);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -17,13 +17,14 @@ export function RoomList() {
     log.action('切换房间', roomId);
     try {
       await openRoom(roomId);
+      onNavigate?.();
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error');
     }
   };
 
   return (
-    <aside className="flex h-full w-64 shrink-0 flex-col border-r bg-muted/30">
+    <aside className="flex h-full w-full shrink-0 flex-col border-r bg-muted/30 md:w-64">
       <div className="flex items-center justify-between px-4 py-3">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">群聊房间</span>
         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setDialogOpen(true)} title="新建群聊">

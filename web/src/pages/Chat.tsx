@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Hash, Loader2, Pause, Play, Plus, StopCircle, Upload, Users } from 'lucide-react';
+import { Hash, Loader2, Menu, Pause, Play, Plus, StopCircle, Upload, Users } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 import { useChatStore } from '@/stores/chat';
 import { useSessionStore } from '@/stores/session';
@@ -38,6 +38,9 @@ export function ChatPage() {
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [newRoomOpen, setNewRoomOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
+  // 手机端：房间列表 / 成员面板都做成抽屉，桌面端仍然常驻
+  const [roomDrawerOpen, setRoomDrawerOpen] = useState(false);
+  const [panelDrawerOpen, setPanelDrawerOpen] = useState(false);
 
   const room = rooms.find((r) => r.id === activeRoomId) ?? null;
   const roomMessages = useMemo(() => (activeRoomId ? (messages[activeRoomId] ?? []) : []), [activeRoomId, messages]);
@@ -90,7 +93,9 @@ export function ChatPage() {
       onDragLeave={() => setDragging(false)}
       onDrop={(e) => void onDrop(e)}
     >
-      <RoomList />
+      <div className="hidden md:flex">
+        <RoomList />
+      </div>
 
       <main className="relative flex min-w-0 flex-1 flex-col">
         {!activeRoomId ? (
@@ -108,7 +113,27 @@ export function ChatPage() {
           </div>
         ) : (
           <>
-            <div className="flex h-14 shrink-0 items-center gap-3 border-b px-4">
+            {/* 手机端顶栏：房间抽屉 + 标题 + 成员面板 */}
+            <div className="flex shrink-0 items-center gap-1 border-b px-1.5 py-1.5 md:hidden">
+              <Button variant="ghost" size="icon" onClick={() => setRoomDrawerOpen(true)} title="房间列表">
+                <Menu className="h-5 w-5" />
+              </Button>
+              <div className="min-w-0 flex-1 px-1">
+                <div className="flex items-center gap-1.5">
+                  <span className="truncate text-sm font-semibold">{room?.name ?? '房间'}</span>
+                  {room?.paused && <Pause className="h-3 w-3 shrink-0 text-amber-500" />}
+                  {roomTyping.length > 0 && <Loader2 className="h-3 w-3 shrink-0 animate-spin text-primary" />}
+                </div>
+                <p className="truncate text-[11px] text-muted-foreground">
+                  {room?.memberCount ?? 0} 人 · {room?.messageCount ?? 0} 条消息
+                </p>
+              </div>
+              <Button variant="ghost" size="icon" onClick={() => setPanelDrawerOpen(true)} title="成员 / 文件 / AI">
+                <Users className="h-5 w-5" />
+              </Button>
+            </div>
+
+            <div className="hidden h-14 shrink-0 items-center gap-3 border-b px-4 md:flex">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <h2 className="truncate font-semibold">{room?.name ?? '房间'}</h2>
@@ -209,8 +234,44 @@ export function ChatPage() {
       </main>
 
       <div className={cn('hidden md:block', !rightPanelOpen && 'md:hidden')}>
-        <RightPanel />
+        <RightPanel onAddMember={() => setAddMemberOpen(true)} />
       </div>
+
+      {/* 手机端抽屉：房间列表 */}
+      {roomDrawerOpen && (
+        <div className="fixed inset-0 z-50 md:hidden">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setRoomDrawerOpen(false)}
+            aria-label="关闭房间列表"
+          />
+          <div className="absolute inset-y-0 left-0 w-[82%] max-w-xs bg-background shadow-xl">
+            <RoomList onNavigate={() => setRoomDrawerOpen(false)} />
+          </div>
+        </div>
+      )}
+
+      {/* 手机端抽屉：成员 / 文件 / AI 面板 */}
+      {panelDrawerOpen && (
+        <div className="fixed inset-0 z-50 md:hidden">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setPanelDrawerOpen(false)}
+            aria-label="关闭成员面板"
+          />
+          <div className="absolute inset-y-0 right-0 w-[90%] max-w-sm bg-background shadow-xl">
+            <RightPanel
+              onClose={() => setPanelDrawerOpen(false)}
+              onAddMember={() => {
+                setPanelDrawerOpen(false);
+                setAddMemberOpen(true);
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -30,6 +30,7 @@ const ROOM = String(flag('room', ''));
 const OUT = path.resolve(String(flag('out', path.join(REPO, 'docs', 'screenshots'))));
 const WIDTH = Number(flag('width', 1440));
 const HEIGHT = Number(flag('height', 960));
+const MOBILE = Boolean(flag('mobile', false));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const shots = [];
@@ -158,14 +159,25 @@ const shoot = async (name) => {
 
 await send('Page.enable');
 await send('Runtime.enable');
-await send('Emulation.setDeviceMetricsOverride', { width: WIDTH, height: HEIGHT, deviceScaleFactor: 1, mobile: false });
+if (MOBILE) {
+  await send('Emulation.setDeviceMetricsOverride', {
+    width: 390,
+    height: 844,
+    deviceScaleFactor: 2,
+    mobile: true,
+    screenOrientation: { type: 'portraitPrimary', angle: 0 },
+  });
+  await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+} else {
+  await send('Emulation.setDeviceMetricsOverride', { width: WIDTH, height: HEIGHT, deviceScaleFactor: 1, mobile: false });
+}
 
 console.log(`\n=== 采集截图 ===\n应用：${APP}\n输出：${OUT}\n`);
 
 await send('Page.navigate', { url: APP });
 await sleep(2500);
 await waitFor(`document.body.innerText.includes('进入群聊')`, { label: '登录页' });
-await shoot('01-login');
+await shoot(MOBILE ? 'mobile-01-login' : '01-login');
 
 if (TAG && TOKEN) {
   // 用 token 登录（走真实登录表单）
@@ -188,6 +200,32 @@ if (ROOM) {
   })()`);
 }
 await sleep(2500);
+
+if (MOBILE) {
+  // 手机端：聊天主界面 → 房间抽屉 → 成员/文件抽屉
+  await shoot('mobile-02-chat');
+  const openedRooms = await clickSelector('button[title="房间列表"]');
+  if (openedRooms) {
+    await sleep(900);
+    await shoot('mobile-03-rooms');
+    await clickSelector('button[aria-label="关闭房间列表"]');
+    await sleep(600);
+  }
+  const openedPanel = await clickSelector('button[title="成员 / 文件 / AI"]');
+  if (openedPanel) {
+    await sleep(900);
+    await shoot('mobile-04-members');
+    await clickTab('文件');
+    await sleep(700);
+    await shoot('mobile-05-files');
+    await clickSelector('button[aria-label="关闭成员面板"]');
+    await sleep(500);
+  }
+  ws.close();
+  console.log(`\n完成，共 ${shots.length} 张：${shots.join('、')}\n`);
+  process.exit(0);
+}
+
 await shoot('02-chat');
 
 await clickTab('文件');

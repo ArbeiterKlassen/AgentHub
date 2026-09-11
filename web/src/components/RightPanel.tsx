@@ -12,6 +12,8 @@ import {
   Trash2,
   Upload,
   UserMinus,
+  UserPlus,
+  X,
 } from 'lucide-react';
 import { useChatStore } from '@/stores/chat';
 import { useSessionStore } from '@/stores/session';
@@ -37,7 +39,7 @@ const STATUS_LABEL: Record<string, string> = {
   offline: '离线',
 };
 
-export function RightPanel() {
+export function RightPanel({ onClose, onAddMember }: { onClose?: () => void; onAddMember?: () => void } = {}) {
   const { members, files, loadingRoom, typing } = useChatStore();
   const activeRoomId = useChatStore((s) => s.activeRoomId);
   const room = useChatStore((s) => s.rooms.find((r) => r.id === s.activeRoomId));
@@ -72,8 +74,13 @@ export function RightPanel() {
   };
 
   return (
-    <aside className="flex h-full w-80 shrink-0 flex-col border-l bg-muted/20">
+    <aside className="flex h-full w-full shrink-0 flex-col border-l bg-muted/20 md:w-80">
       <div className="flex items-center gap-2 border-b px-3 py-2">
+        {onClose && (
+          <Button variant="ghost" size="icon" className="h-8 w-8 md:hidden" onClick={onClose} title="关闭">
+            <X className="h-4 w-4" />
+          </Button>
+        )}
         <Tabs value={rightTab} onValueChange={(v) => setRightTab(v as typeof rightTab)} className="flex-1">
           <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="members" className="text-xs">
@@ -99,6 +106,12 @@ export function RightPanel() {
         <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto p-3">
           <Tabs value={rightTab} onValueChange={(v) => setRightTab(v as typeof rightTab)}>
             <TabsContent value="members" className="mt-0 space-y-1.5">
+              {onAddMember && (
+                <Button variant="outline" size="sm" className="w-full" onClick={onAddMember}>
+                  <UserPlus className="h-3.5 w-3.5" />
+                  拉人 / 拉 AI 进房间
+                </Button>
+              )}
               {list.map((member) => (
                 <div key={member.tag} className="flex items-center gap-2 rounded-lg border bg-card p-2">
                   <Avatar member={member} size="sm" showPresence online={member.online} />

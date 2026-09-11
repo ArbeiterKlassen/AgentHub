@@ -38,17 +38,17 @@ export function AppShell() {
 
   return (
     <div className="flex h-full flex-col bg-background">
-      <header className="flex h-14 shrink-0 items-center gap-3 border-b px-4">
-        <Link to="/" className="flex items-center gap-2">
+      <header className="flex h-14 shrink-0 items-center gap-2 border-b px-2 sm:gap-3 sm:px-4">
+        <Link to="/" className="flex shrink-0 items-center gap-2">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
             <MessagesSquare className="h-4 w-4" />
           </span>
-          <span className="text-base font-bold">
+          <span className="hidden text-base font-bold sm:inline">
             Agent<span className="text-primary">Hub</span>
           </span>
         </Link>
 
-        <nav className="ml-2 flex items-center gap-1">
+        <nav className="ml-1 flex min-w-0 items-center gap-0.5 sm:ml-2 sm:gap-1">
           {NAV.map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
@@ -56,7 +56,7 @@ export function AppShell() {
               end={end}
               className={({ isActive }) =>
                 cn(
-                  'flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors',
+                  'flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm transition-colors sm:px-3',
                   isActive
                     ? 'bg-accent font-medium text-accent-foreground'
                     : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
@@ -64,12 +64,12 @@ export function AppShell() {
               }
             >
               <Icon className="h-4 w-4" />
-              {label}
+              <span className="hidden md:inline">{label}</span>
             </NavLink>
           ))}
         </nav>
 
-        <div className="ml-auto flex items-center gap-1.5">
+        <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-1.5">
           <span
             className={cn(
               'mr-1 hidden items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs sm:flex',

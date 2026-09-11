@@ -181,7 +181,7 @@ export function Composer({ roomId, members, replyTo, onClearReply }: ComposerPro
   };
 
   return (
-    <div className="shrink-0 border-t bg-background/95 px-4 py-3">
+    <div className="shrink-0 border-t bg-background/95 px-2.5 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:px-4 md:py-3">
       <div className="mx-auto max-w-4xl">
         {replyTo && (
           <div className="mb-2 flex items-center gap-2 rounded-lg border bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground">
@@ -195,7 +195,7 @@ export function Composer({ roomId, members, replyTo, onClearReply }: ComposerPro
 
         <div className="relative">
           {(pickerOpen && candidates.length > 0) || commandMatches.length > 0 ? (
-            <div className="absolute bottom-full left-0 mb-2 max-h-64 w-80 overflow-y-auto rounded-lg border bg-popover p-1 shadow-lg">
+            <div className="absolute bottom-full left-0 mb-2 max-h-64 w-[min(20rem,calc(100vw-2rem))] overflow-y-auto rounded-lg border bg-popover p-1 shadow-lg">
               {commandMatches.length > 0
                 ? commandMatches.map((item) => (
                     <button
@@ -270,7 +270,6 @@ export function Composer({ roomId, members, replyTo, onClearReply }: ComposerPro
               title="发起多 AI 讨论"
               onClick={() => setDiscussOpen(true)}
               disabled={!agents.length}
-              className="hidden sm:inline-flex"
             >
               <Users className="h-4 w-4" />
             </Button>

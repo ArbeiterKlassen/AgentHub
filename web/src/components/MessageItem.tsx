@@ -99,7 +99,7 @@ export function MessageItem({ message, members, files, replyTo, onReply, onDelet
     <div className={cn('group flex gap-6 px-4 py-1.5', isOwn ? 'flex-row-reverse' : 'flex-row')}>
       <Avatar member={sender ?? { nickname: message.senderNickname, avatar: '', color: '#64748b', kind: 'human' }} />
 
-      <div className={cn('flex min-w-0 max-w-[76%] flex-col gap-1', isOwn ? 'items-end' : 'items-start')}>
+      <div className={cn('flex min-w-0 max-w-[86%] flex-col gap-1 md:max-w-[76%]', isOwn ? 'items-end' : 'items-start')}>
         <div className={cn('flex items-center gap-1.5 text-[11px] text-muted-foreground', isOwn && 'flex-row-reverse')}>
           <span className="font-medium text-foreground/80">{message.senderNickname}</span>
           <span>@{message.senderTag}</span>
@@ -169,9 +169,10 @@ export function MessageItem({ message, members, files, replyTo, onReply, onDelet
           </div>
         )}
 
+        {/* 触屏没有 hover：小屏常显操作条，桌面端才做悬停显示 */}
         <div
           className={cn(
-            'flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100',
+            'flex items-center gap-0.5 transition-opacity md:opacity-0 md:group-hover:opacity-100',
             isOwn && 'flex-row-reverse',
           )}
         >
