@@ -12,6 +12,13 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const argv = process.argv.slice(2);
+const flag = (name, fallback = null) => {
+  const i = argv.indexOf(`--${name}`);
+  if (i < 0) return fallback;
+  const next = argv[i + 1];
+  return next && !next.startsWith('--') ? next : true;
+};
 const PORT = Number(process.env.AH_PORT ?? 8787);
 const WANT_HTTPS = Boolean(flag('https', Boolean(process.env.AH_TLS_CERT)));
 let SCHEME = WANT_HTTPS ? 'https' : 'http';
