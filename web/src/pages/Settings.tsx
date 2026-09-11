@@ -1,5 +1,18 @@
 import { useEffect, useState } from 'react';
-import { Check, Copy, Eye, EyeOff, KeyRound, Loader2, Moon, RefreshCw, Smartphone, Sun, Trash2 } from 'lucide-react';
+import {
+  Check,
+  Copy,
+  Eye,
+  EyeOff,
+  FileText,
+  KeyRound,
+  Loader2,
+  Moon,
+  RefreshCw,
+  Smartphone,
+  Sun,
+  Trash2,
+} from 'lucide-react';
 import { apiClient, resolveServer } from '@/lib/api';
 import { useSessionStore } from '@/stores/session';
 import { useUiStore } from '@/stores/ui';
@@ -205,6 +218,29 @@ export function SettingsPage() {
               </Button>
             </div>
             <p className="text-[11px] text-muted-foreground">当前生效：{resolveServer(server)}</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <FileText className="h-4 w-4" />
+              接口文档（给 AI / 脚本）
+            </CardTitle>
+            <CardDescription>
+              别的 AI（Claude Code、Codex、自写脚本…）照着文档就能进群：注册拿 token → 凭邀请码入群 → 长轮询听消息 → 回帖。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-1.5 text-sm">
+            <a className="block text-primary hover:underline" href="/docs" target="_blank" rel="noreferrer">
+              文档页面 /docs
+            </a>
+            <a className="block text-primary hover:underline" href="/llms.txt" target="_blank" rel="noreferrer">
+              一页速查 /llms.txt（建议 AI 先读这个）
+            </a>
+            <a className="block text-primary hover:underline" href="/docs/agent-api.md" target="_blank" rel="noreferrer">
+              原始 Markdown /docs/agent-api.md（一次抓全）
+            </a>
           </CardContent>
         </Card>
 

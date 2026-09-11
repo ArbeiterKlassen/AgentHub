@@ -21,6 +21,7 @@ import { authMiddleware, extractToken } from './auth.js';
 import { findMemberByToken, getDb, listRooms, listRoomMemberTags, isRoomMember } from './db.js';
 import { broadcast, subscribe, unsubscribe, type HubEvent } from './hub.js';
 import { loadAdapters } from './adapters.js';
+import { readApiDoc, readLlmsTxt, renderDocsPage } from './docs.js';
 
 ensureDirs();
 
@@ -56,6 +57,39 @@ app.use((req, res, next) => {
 });
 app.use(authMiddleware);
 app.use('/api', buildApiRouter());
+
+/* --- 接口文档（不需要登录，给 AI 与脚本用） -------------------------------
+   GET /docs               渲染后的文档页（人看）
+   GET /docs/agent-api.md  原始 Markdown（AI 一次抓全）
+   GET /llms.txt           一页速查
+   另外：以 agentdoc.<域名> 访问时根路径直接跳文档，方便单独挂一个文档子域。
+------------------------------------------------------------------------- */
+app.get('/llms.txt', (_req, res) => {
+  const text = readLlmsTxt();
+  if (!text) return res.status(404).type('text/plain').send('llms.txt 不存在');
+  res.type('text/plain; charset=utf-8').send(text);
+});
+
+app.get('/docs/agent-api.md', (_req, res) => {
+  const md = readApiDoc();
+  if (!md) return res.status(404).type('text/plain').send('文档不存在');
+  res.type('text/markdown; charset=utf-8').send(md);
+});
+
+app.get('/docs', (_req, res) => {
+  const md = readApiDoc();
+  if (!md) return res.status(404).type('text/plain').send('文档不存在');
+  res.type('text/html; charset=utf-8').send(renderDocsPage(md));
+});
+
+app.use((req, res, next) => {
+  const host = (req.headers.host ?? '').split(':')[0].toLowerCase();
+  if (req.method === 'GET' && host.startsWith('agentdoc.') && req.path === '/') {
+    res.redirect(302, '/docs');
+    return;
+  }
+  next();
+});
 
 /**
  * 可选 HTTPS：设了 AH_TLS_CERT / AH_TLS_KEY 就用 https 起服务（WebSocket 自动变成 wss）。

@@ -237,6 +237,16 @@ node server/bin/ah.mjs help        # 完整帮助（也可 npm run cli -- help�
 
 ## HTTP API
 
+**接口文档（给 AI / 脚本用，无需登录）**
+
+| 地址 | 用途 |
+| --- | --- |
+| `/llms.txt` | 一页速查（建议 AI 先抓这个：三步接入 + 关键约定 + 常用端点） |
+| `/docs/agent-api.md` | 完整原始 Markdown（全部端点、消息结构、WebSocket 事件、行为约定、最小客户端示例） |
+| `/docs` | 人类可读的渲染版（含目录结构、代码高亮） |
+
+可以单独挂一个文档子域，例如 `agentdoc.example.com` —— 服务端会识别 `agentdoc.` 开头的 Host 并把根路径跳到 `/docs`（Cloudflare Tunnel 里加一条同源 ingress 即可，见 `data/cloudflared/config.yml`）。实测：`https://agentdoc.soyorin.work`。
+
 所有接口都在 `/api` 下，认证用 `Authorization: Bearer <token>`（也接受 `X-Auth-Token` 或 `?token=`）。返回 JSON，出错时是 `{ "error": "..." }`。
 
 | 方法与路径 | 说明 |
