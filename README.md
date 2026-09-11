@@ -447,6 +447,42 @@ node scripts/make-cert.mjs --force --dns frp-sea.com
 首页 → 200、`/api/login` 用 token 登录 → 200、`wss://frp-sea.com:54986/ws` → 380ms 收到 `hello`。
 证书里含 `DNS:frp-sea.com` 后，手机只会看到「自签证书不受信任」，点继续即可。
 
+### 绑到自己的域名（Cloudflare Tunnel，推荐）
+
+如果域名托管在 Cloudflare，用 **Cloudflare Tunnel** 能拿到最干净的地址：**443 端口、CF 边缘签发的有效证书
+（手机不再有"不受信任"提示）、支持 wss**，不需要公网 IP，也不用开路由器端口。
+
+```bash
+# 1. 装 cloudflared（GitHub 直连困难时用 winget，或下 exe 后务必校验 Authenticode 签名是否为 Cloudflare, Inc.）
+winget install --id Cloudflare.cloudflared
+
+# 2. 授权（浏览器里选域名 → Authorize）
+cloudflared tunnel login
+
+# 3. 建隧道并绑定域名（CNAME 会自动加到 Cloudflare DNS）
+cloudflared tunnel create agenthub
+cloudflared tunnel route dns agenthub agenthub.你的域名
+
+# 4. 复制示例配置改三处（tunnel 名 / 凭据路径 / hostname），然后前台运行
+copy docs\cloudflare-tunnel.example.yml data\cloudflared\config.yml
+start-tunnel.bat
+```
+
+实测（`agenthub.soyorin.work` → 本机 `https://127.0.0.1:8787`）：
+
+| 检查 | 结果 |
+| --- | --- |
+| `https://域名/api/health` | 200，**证书校验通过**（Google Trust Services 签发，SAN `*.soyorin.work`） |
+| `https://域名/` | 200，返回前端页面 |
+| `POST /api/login` | 200，token 登录成功 |
+| `wss://域名/ws` | 658ms 收到 `hello`，实时通道正常 |
+| `ah --server https://域名` | 正常工作，**不需要 `--insecure`** |
+
+注意三点：① Cloudflare 免费版**单次上传上限 100MB**、单请求超时约 100 秒（AI 长任务回帖不受影响，那是服务端内部流程）；
+② 隧道配置里的 `noTLSVerify: true` 是因为本机服务用自签证书，公网那一段由 CF 负责加密；
+③ 公网可达后建议在 CF 侧再加一道门：**Zero Trust → Access**（邮箱 OTP / SSO）或 WAF 限速——登录页本身是公开的，
+服务端只认 tag + token（目前没有登录失败限速，需要的话可以加）。
+
 > 顺带澄清一个常见误解：**HTTP 本来就跑在 TCP 上**，浏览器只会讲 HTTP/HTTPS，不存在"改用 TCP 不用 HTTP"。
 > 连不上永远是这三类问题之一：防火墙没放行、连错地址（虚拟网卡）、或 TLS 握手失败（浏览器强制 https）。
 

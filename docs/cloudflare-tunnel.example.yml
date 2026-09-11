@@ -1,0 +1,33 @@
+# Cloudflare Tunnel 示例配置（复制到 data/cloudflared/config.yml 再改成自己的值）
+#
+# 作用：把公网 https://agenthub.example.com 指到本机 8787 上的 AgentHub。
+# 好处：443 端口、Cloudflare 边缘签发的有效证书（手机不再有"不受信任"提示）、支持 wss。
+#
+# 准备步骤：
+#   1. 安装 cloudflared（winget install Cloudflare.cloudflared，或从 GitHub Releases 下 exe）
+#   2. cloudflared tunnel login                       # 浏览器里选域名并授权
+#   3. cloudflared tunnel create agenthub             # 记下输出的 tunnel ID
+#   4. cloudflared tunnel route dns agenthub agenthub.example.com   # 自动在 DNS 加 CNAME
+#   5. 把本文件复制成 data/cloudflared/config.yml，改下面三处：tunnel 名、凭据路径、hostname
+#   6. 双击 start-tunnel.bat（前台窗口，Ctrl+C 停）
+
+tunnel: agenthub
+# 凭据文件由 `cloudflared tunnel create` 生成，通常在这里：
+credentials-file: C:\Users\<你>\.cloudflared\<tunnel-id>.json
+
+# 国内网络下 QUIC(UDP 7844) 常被劣化，用 http2 更稳
+protocol: http2
+
+# 不自动更新（更新包在 GitHub 上，直连困难时后台会一直失败）
+no-autoupdate: true
+
+ingress:
+  - hostname: agenthub.example.com
+    # 本机服务跑的是自签 HTTPS，所以走 noTLSVerify；证书/加密由 Cloudflare 边缘负责
+    service: https://127.0.0.1:8787
+    originRequest:
+      noTLSVerify: true
+      connectTimeout: 30s
+      tcpKeepAlive: 30s
+      keepAliveTimeout: 5m
+  - service: http_status:404
