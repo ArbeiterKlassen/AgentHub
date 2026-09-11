@@ -408,6 +408,27 @@ start-agenthub.bat --https     # 没有证书会自动生成；WebSocket 自动�
 
 自签证书手机首次打开会提示「不安全」，点继续即可；想让提示消失，就把 `data/tls/cert.pem` 装进手机的受信任凭据。
 
+### 走内网穿透（frp / SakuraFrp 之类）
+
+穿透分两种类型，配置方式和本服务要匹配：
+
+| 穿透类型 | 本机服务该怎么起 | 手机打开的地址 |
+| --- | --- | --- |
+| **TCP** 隧道（远端只是转发原始 TCP） | `start-agenthub.bat`（HTTP 就行，穿透通常自带 TLS） | 穿透面板给的 `https://xxx` 地址 |
+| **HTTPS** 隧道（按 SNI 路由 TLS，明文 HTTP 会被 frps 回 501） | **必须** `start-agenthub.bat --https` | `https://<穿透域名>:<端口>` |
+
+判断自己是哪种：`curl -s -o /dev/null -w "%{http_code}" http://<穿透地址>` —— 返回 **501（Server: SakuraFrp 之类）** 说明它是 HTTPS 隧道，本机必须开 TLS 才能通。
+
+签证书时把穿透域名一起写进 SAN，手机才不会报「名称不匹配」：
+
+```powershell
+node scripts/make-cert.mjs --force --dns frp-sea.com
+```
+
+实测（SakuraFrp 的 HTTPS 隧道，远端端口 54986）：`https://frp-sea.com:54986/api/health` → 200、
+首页 → 200、`/api/login` 用 token 登录 → 200、`wss://frp-sea.com:54986/ws` → 380ms 收到 `hello`。
+证书里含 `DNS:frp-sea.com` 后，手机只会看到「自签证书不受信任」，点继续即可。
+
 > 顺带澄清一个常见误解：**HTTP 本来就跑在 TCP 上**，浏览器只会讲 HTTP/HTTPS，不存在"改用 TCP 不用 HTTP"。
 > 连不上永远是这三类问题之一：防火墙没放行、连错地址（虚拟网卡）、或 TLS 握手失败（浏览器强制 https）。
 

@@ -4,6 +4,7 @@
  *
  *   node scripts/make-cert.mjs                 # 生成 data/tls/cert.pem + key.pem（含本机所有局域网 IP）
  *   node scripts/make-cert.mjs --days 3650     # 自定义有效期
+ *   node scripts/make-cert.mjs --dns a.com,b.com   # 额外把域名写进 SAN（内网穿透的域名填这里）
  *   node scripts/make-cert.mjs --force         # 已存在也重新生成
  *
  * 证书带 subjectAltName（localhost / 127.0.0.1 / 每个局域网 IP），所以用 IP 直接访问也不会报「域名不匹配」。
@@ -32,6 +33,10 @@ const flag = (name, fallback) => {
 };
 const DAYS = Number(flag('days', 1095));
 const FORCE = Boolean(flag('force', false));
+const EXTRA_DNS = String(flag('dns', process.env.AH_TLS_DNS ?? ''))
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 function findOpenssl() {
   const candidates = [
@@ -73,7 +78,8 @@ if (!openssl) {
 }
 
 fs.mkdirSync(TLS_DIR, { recursive: true });
-const sans = ['DNS:localhost', 'IP:127.0.0.1', ...lanIps().map((ip) => `IP:${ip}`)].join(',');
+const dnsNames = [...new Set(['localhost', ...EXTRA_DNS])];
+const sans = [...dnsNames.map((d) => `DNS:${d}`), 'IP:127.0.0.1', ...lanIps().map((ip) => `IP:${ip}`)].join(',');
 console.log(`使用 ${openssl}\nSAN: ${sans}`);
 
 const res = spawnSync(
