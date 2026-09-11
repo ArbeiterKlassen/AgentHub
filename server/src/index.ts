@@ -1,4 +1,5 @@
 import http from 'node:http';
+import https from 'node:https';
 import fs from 'node:fs';
 import os from 'node:os';
 import express from 'express';
@@ -45,7 +46,21 @@ app.use((req, res, next) => {
 app.use(authMiddleware);
 app.use('/api', buildApiRouter());
 
-const server = http.createServer(app);
+/**
+ * 可选 HTTPS：设了 AH_TLS_CERT / AH_TLS_KEY 就用 https 起服务（WebSocket 自动变成 wss）。
+ * 手机浏览器有些会把 http 强制升级成 https（Chrome 的「始终使用安全连接」），
+ * 内网穿透服务通常也只给 https 地址，这两种情况都需要服务端能说 TLS。
+ */
+const tlsCertPath = process.env.AH_TLS_CERT;
+const tlsKeyPath = process.env.AH_TLS_KEY;
+const tlsReady = Boolean(tlsCertPath && tlsKeyPath && fs.existsSync(tlsCertPath) && fs.existsSync(tlsKeyPath));
+const scheme = tlsReady ? 'https' : 'http';
+const server = tlsReady
+  ? https.createServer(
+      { cert: fs.readFileSync(tlsCertPath!), key: fs.readFileSync(tlsKeyPath!) },
+      app,
+    )
+  : http.createServer(app);
 serveWeb(app, WEB_DIST);
 
 const wss = new WebSocketServer({ noServer: true });
@@ -162,17 +177,17 @@ server.listen(PORT, HOST, () => {
   const lans = lanAddresses();
   console.log('');
   console.log('  AgentHub 服务已启动');
-  console.log(`  ├─ 本机地址   http://127.0.0.1:${PORT}`);
+  console.log(`  ├─ 本机地址   ${scheme}://127.0.0.1:${PORT}${tlsReady ? '  （自签证书，浏览器会提示不安全，继续访问即可）' : ''}`);
   if (lans.length) {
     const first = lans[0];
-    console.log(`  ├─ 手机访问   http://${first.address}:${PORT}   （${first.iface}）`);
+    console.log(`  ├─ 手机访问   ${scheme}://${first.address}:${PORT}   （${first.iface}）`);
     for (const extra of lans.slice(1, 4)) {
-      console.log(`  │             http://${extra.address}:${PORT}   （${extra.iface}）`);
+      console.log(`  │             ${scheme}://${extra.address}:${PORT}   （${extra.iface}）`);
     }
   } else {
     console.log('  ├─ 手机访问   未发现局域网地址（可能只有回环网卡）');
   }
-  console.log(`  ├─ WebSocket  ws://127.0.0.1:${PORT}/ws?token=<你的 token>`);
+  console.log(`  ├─ WebSocket  ${tlsReady ? 'wss' : 'ws'}://127.0.0.1:${PORT}/ws?token=<你的 token>`);
   console.log(`  ├─ 数据目录   ${DATA_DIR}`);
   console.log(`  ├─ 适配器     ${adapters.map((a) => a.id).join(', ')}`);
   const hasWeb = (() => {

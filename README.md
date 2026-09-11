@@ -316,6 +316,9 @@ agenthub/
 │   ├── capture-screenshots.mjs # 采集 README 截图
 │   ├── prune-test-members.mjs  # 清理自检留下的空号/测试房间（默认只预览）
 │   ├── restart-when-idle.mjs   # 等没有 AI 在跑时重启服务（让改动安全生效）
+│   ├── check-lan.mjs           # 局域网体检：防火墙 / 网络位置 / 可用地址
+│   ├── fix-lan-access.ps1      # 管理员脚本：放行端口 + 网络改「专用」
+│   ├── make-cert.mjs           # 生成自签 HTTPS 证书（SAN 含局域网 IP）
 │   └── db-dump.mjs             # 直接读 SQLite 排查数据
 ├── server/
 │   ├── bin/ah.mjs              # 命令行客户端（零依赖）
@@ -371,6 +374,42 @@ node scripts/db-dump.mjs --runs
 - 上传文件保存在 `data/files/<房间>/`，删除房间不会自动删磁盘文件，需要手工清理。
 
 ## 常见问题
+
+### 手机 / 别的设备连不上？
+
+先跑体检，它会直接告诉你卡在哪一步：
+
+```bash
+node scripts/check-lan.mjs        # 查监听、防火墙、网络位置、可用地址，并给出修复命令
+```
+
+最常见的原因是这两个（本机实测都中过）：
+
+1. **Windows 防火墙没放行**。电脑自己访问走的是回环，绕过防火墙，所以会出现「电脑能开、手机连不上」。
+   以管理员身份运行一次（开始菜单搜 PowerShell → 右键「以管理员身份运行」）：
+
+   ```powershell
+   pwsh -File scripts\fix-lan-access.ps1
+   ```
+
+   它会加一条 TCP 入站规则，并把当前连接从「公用网络」改成「专用网络」——Windows 对公用网络默认拒绝入站，只加规则不改这个也连不上。
+   撤销：`pwsh -File scripts\fix-lan-access.ps1 -Remove`。注意放行后同一局域网的其他设备都能访问该端口（仍需 token 登录），在咖啡厅这类不可信网络建议先撤销。
+
+2. **连错地址**。第一个网卡经常是 VMware / Hyper-V / WSL 的虚拟网卡，手机照着连必然失败。
+   启动横幅与 `check-lan.mjs` 都会把真实网卡（WLAN / 以太网）排在前面。
+
+如果手机浏览器把 `http` 强制升级成 `https`（Chrome 的「始终使用安全连接」），或者你的内网穿透只提供 https 地址，
+可以让服务端直接说 HTTPS：
+
+```powershell
+node scripts/make-cert.mjs     # 生成自签证书：SAN 含本机所有局域网 IP，有效期 3 年
+start-agenthub.bat --https     # 没有证书会自动生成；WebSocket 自动变成 wss
+```
+
+自签证书手机首次打开会提示「不安全」，点继续即可；想让提示消失，就把 `data/tls/cert.pem` 装进手机的受信任凭据。
+
+> 顺带澄清一个常见误解：**HTTP 本来就跑在 TCP 上**，浏览器只会讲 HTTP/HTTPS，不存在"改用 TCP 不用 HTTP"。
+> 连不上永远是这三类问题之一：防火墙没放行、连错地址（虚拟网卡）、或 TLS 握手失败（浏览器强制 https）。
 
 **AI 不回话？**
 依次检查：① 该 AI 是否在这个房间里（右侧「成员」）；② 消息里是不是写对了 `@tag`，或者该 AI 的触发方式是「被 @」；③ 右侧「AI」面板看状态是不是 `出错`，点「运行记录」看提示词与报错；④ 网页「AI 成员」页看适配器是否可用（比如 `codex` 是否在 PATH 里）。

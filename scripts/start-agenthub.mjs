@@ -13,7 +13,9 @@ import { fileURLToPath } from 'node:url';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.AH_PORT ?? 8787);
-const URL = `http://127.0.0.1:${PORT}`;
+const WANT_HTTPS = Boolean(flag('https', Boolean(process.env.AH_TLS_CERT)));
+let SCHEME = WANT_HTTPS ? 'https' : 'http';
+const URL = () => `${SCHEME}://127.0.0.1:${PORT}`;
 
 const c = {
   cyan: (t) => `\u001b[36m${t}\u001b[0m`,
@@ -33,7 +35,7 @@ async function healthOk(timeoutMs = 1500) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${URL}/api/health`, { signal: controller.signal });
+    const res = await fetch(`${URL()}/api/health`, { signal: controller.signal });
     return res.ok;
   } catch {
     return false;
@@ -45,7 +47,7 @@ async function healthOk(timeoutMs = 1500) {
 function openBrowser() {
   if (process.env.AH_NO_BROWSER === '1') return;
   try {
-    spawn('cmd.exe', ['/c', 'start', '', URL], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+  spawn('cmd.exe', ['/c', 'start', '', URL()], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
   } catch {
     /* 打不开浏览器不影响服务 */
   }
@@ -54,7 +56,7 @@ function openBrowser() {
 // 1. 已经在跑：只开网页，不重复启动（否则两个进程抢 8787）
 if (await healthOk()) {
   console.log(c.yellow('  [提示] 服务已经在运行了，这次只帮你打开网页。'));
-  console.log(c.dim(`         ${URL}`));
+  console.log(c.dim(`         ${URL()}`));
   console.log(c.dim('         要停止服务，请在它自己的窗口里按 Ctrl+C。'));
   console.log('');
   openBrowser();
@@ -81,8 +83,39 @@ if (!fs.existsSync(path.join(REPO, 'server', 'dist', 'index.js'))) {
   console.log('');
 }
 
+// 2.5 要 HTTPS 就确保证书存在（没有就现场生成一张自签的）
+if (WANT_HTTPS) {
+  const tlsDir = path.join(process.env.AH_DATA_DIR ?? path.join(REPO, 'data'), 'tls');
+  const certPath = path.join(tlsDir, 'cert.pem');
+  const keyPath = path.join(tlsDir, 'key.pem');
+  if (!fs.existsSync(certPath) || !fs.existsSync(keyPath)) {
+    console.log(c.yellow('  [提示] 还没有 HTTPS 证书，正在生成自签证书（有效期 3 年）…'));
+    const code = await new Promise((resolve) => {
+      const child = spawn(process.execPath, [path.join(REPO, 'scripts', 'make-cert.mjs')], {
+        cwd: REPO,
+        stdio: 'inherit',
+        windowsHide: true,
+      });
+      child.on('close', (exitCode) => resolve(exitCode ?? 1));
+    });
+    if (code !== 0) {
+      console.error(c.red('  [错误] 证书生成失败，改用 HTTP 启动。'));
+      SCHEME = 'http';
+    }
+  }
+  if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+    process.env.AH_TLS_CERT = certPath;
+    process.env.AH_TLS_KEY = keyPath;
+    // 自签证书，本机自检不需要校验证书链
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+    console.log(c.green('  [HTTPS] 已启用自签证书；手机首次打开会提示「不安全」，点继续即可。'));
+    console.log(c.dim(`         想让提示消失：把 ${certPath} 装到手机的受信任凭据里。`));
+    console.log('');
+  }
+}
+
 // 3. 前台运行守护进程：Ctrl+C 即可停止
-console.log(`  服务地址   ${c.cyan(URL)}`);
+console.log(`  服务地址   ${c.cyan(URL())}`);
 console.log(`  ${c.yellow('停止服务')}   在这个窗口按 Ctrl+C`);
 console.log(`  ${c.yellow('关闭窗口')}   直接点右上角 X（等于停止服务）`);
 console.log('');

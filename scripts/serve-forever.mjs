@@ -30,6 +30,10 @@ const flag = (name, fallback) => {
   return next && !next.startsWith('--') ? next : true;
 };
 const PORT = Number(process.env.AH_PORT ?? 8787);
+/** 启用了 HTTPS（AH_TLS_CERT）时，本机健康检查也要走 https，并跳过自签证书校验 */
+const TLS = Boolean(process.env.AH_TLS_CERT && process.env.AH_TLS_KEY);
+const SCHEME = TLS ? 'https' : 'http';
+if (TLS) process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 const MAX_RESTARTS = Number(flag('max-restarts', 50));
 const DETACH = Boolean(flag('detach', false));
 
@@ -71,7 +75,7 @@ async function healthOk(timeoutMs = 3000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`http://127.0.0.1:${PORT}/api/health`, { signal: controller.signal });
+    const res = await fetch(`${SCHEME}://127.0.0.1:${PORT}/api/health`, { signal: controller.signal });
     return res.ok;
   } catch {
     return false;
