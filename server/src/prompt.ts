@@ -56,7 +56,15 @@ function stamp(ts: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-export function renderTranscript(lines: TranscriptLine[], maxChars = 6000): string {
+export interface RenderedTranscript {
+  text: string;
+  /** 实际保留了多少条 */
+  kept: number;
+  /** 因为上下文预算被丢掉多少条 */
+  omitted: number;
+}
+
+export function renderTranscript(lines: TranscriptLine[], maxChars = 6000): RenderedTranscript {
   const rendered = lines.map((line) => {
     const who = line.kind === 'agent' ? `${line.nickname}(AI)` : line.nickname;
     const files = line.files.length ? ` [附件 ${line.files.length} 个]` : '';
@@ -70,7 +78,7 @@ export function renderTranscript(lines: TranscriptLine[], maxChars = 6000): stri
     if (total > maxChars && kept.length) break;
     kept.unshift(rendered[i]);
   }
-  return kept.join('\n');
+  return { text: kept.join('\n'), kept: kept.length, omitted: rendered.length - kept.length };
 }
 
 export interface BuildPromptOptions {
@@ -146,8 +154,19 @@ export function buildAgentPrompt(opts: BuildPromptOptions): string {
     lines.push('请直接看图回答；不要用工具去读这些文件，也不要在看不到时假装看到了（看不到就明说）。');
   }
   lines.push('');
-  lines.push(`【最近的群聊记录】（共 ${recent.length} 条，从旧到新）`);
-  lines.push(recent.length ? renderTranscript(recent) : '（还没有消息）');
+  const rendered = renderTranscript(recent);
+  lines.push(
+    `【最近的群聊记录】（${rendered.kept ? `保留最近 ${rendered.kept}/${recent.length} 条` : '暂无'}，从旧到新）`,
+  );
+  lines.push(rendered.text || '（还没有消息）');
+  if (rendered.omitted > 0) {
+    // 明确告诉 AI「上下文被砍过」，免得它以为群里就这些内容
+    lines.push(
+      `（更早的 ${rendered.omitted} 条消息因上下文预算已省略。需要完整历史时自己拉：` +
+        `\`node server/bin/ah.mjs history --room "${opts.roomName}" --limit 100\`，` +
+        `或 GET /api/rooms/<房间>/messages?limit=100）`,
+    );
+  }
   if (opts.fileHint) {
     lines.push('');
     lines.push('【共享文件区】');

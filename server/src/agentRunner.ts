@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { TMP_DIR } from './env.js';
-import { substitute, type AdapterPreset } from './adapters.js';
+import { resolveCommandSync, substitute, type AdapterPreset } from './adapters.js';
 
 export interface AgentRunOptions {
   adapter: AdapterPreset;
@@ -36,6 +36,22 @@ function tailOf(input: string, maxChars: number): string {
   const text = input.replace(/\r\n/g, '\n').trim();
   const tail = text.length > maxChars ? `…${text.slice(-maxChars)}` : text;
   return tail.replace(/\n{3,}/g, '\n\n');
+}
+
+/**
+ * 解码子进程输出：中文 Windows 的 cmd / 很多 CLI 会吐 GBK 字节，直接 String() 会变成乱码
+ * （例如「'codex' 不是内部或外部命令」变成一串问号）。这里先按 UTF-8 严格解，失败再按 GBK。
+ */
+function decodeChunk(buf: Buffer): string {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf);
+  } catch {
+    try {
+      return new TextDecoder('gbk').decode(buf);
+    } catch {
+      return buf.toString('utf8');
+    }
+  }
 }
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -284,6 +300,33 @@ async function runCliAdapter(opts: AgentRunOptions): Promise<AgentRunResult> {
   const useShell = needsShell();
   const inputMode = adapter.input ?? 'stdin';
   const command = adapter.command ?? '';
+
+  // 先把命令解析成绝对路径：从资源管理器双击启动的服务看不到 Codex / Claude Code 这类
+  // 应用私有 bin 目录（那份 PATH 只存在于它们自己的子进程里），会报「不是内部或外部命令」。
+  const resolved = resolveCommandSync(command, adapter);
+  if (!resolved) {
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+    return {
+      ok: false,
+      text: '',
+      stdout: '',
+      stderr: '',
+      exitCode: null,
+      durationMs: Date.now() - started,
+      error:
+        `找不到命令「${command}」：PATH 与候选路径里都没有。\n` +
+        `    处理办法：① 安装它；② 或用环境变量 AH_CLI_SEARCH_PATHS 指定目录（分号分隔，支持 * 通配）；` +
+        `③ 或在 adapters.json 里给该适配器加 searchPaths。`,
+      command: `${command}（未解析到可执行文件）`,
+    };
+  }
+  const exeToRun = resolved.path;
+  /** .exe 可以不经 shell 直接起（更安全），.cmd/.bat/.ps1 必须走 shell */
+  const needShellForThis = process.platform === 'win32' && !/\.exe$/i.test(exeToRun);
   const images = usableImages(adapter, opts.imageFiles);
   const imageArgs = buildImageArgs(adapter, images);
   const rawArgs = (adapter.args ?? []).flatMap((arg) =>
@@ -360,14 +403,14 @@ async function runCliAdapter(opts: AgentRunOptions): Promise<AgentRunResult> {
           windowsHide: true,
         });
       } else {
-        const args = useShell ? rawArgs.map(quoteForCmd) : rawArgs;
-        child = spawn(command, args, {
-          cwd,
-          env,
-          shell: useShell,
-          windowsHide: true,
-          detached: process.platform !== 'win32',
-        });
+      const args = needShellForThis ? rawArgs.map(quoteForCmd) : rawArgs;
+      child = spawn(exeToRun, args, {
+        cwd,
+        env,
+        shell: needShellForThis,
+        windowsHide: true,
+        detached: process.platform !== 'win32',
+      });
       }
     } catch (err) {
       cleanup();
@@ -390,15 +433,16 @@ async function runCliAdapter(opts: AgentRunOptions): Promise<AgentRunResult> {
     }, timeoutMs);
 
     child.stdout?.on('data', (chunk: Buffer) => {
-      const text = String(chunk);
+      const text = decodeChunk(chunk);
       stdout += text;
       if (stdout.length > 400_000) stdout = stdout.slice(-200_000);
       onOutput?.(text);
     });
     child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += String(chunk);
+      const text = decodeChunk(chunk);
+      stderr += text;
       if (stderr.length > 100_000) stderr = stderr.slice(-50_000);
-      onOutput?.(String(chunk));
+      onOutput?.(text);
     });
     child.on('error', (err) => {
       clearTimeout(timer);

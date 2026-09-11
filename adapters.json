@@ -65,6 +65,13 @@
       "input": "stdin",
       "output": "file",
       "images": { "flag": "-i", "max": 4, "maxBytes": 8388608 },
+      "searchPaths": [
+        "%LOCALAPPDATA%/OpenAI/Codex/bin/*/codex.exe",
+        "%LOCALAPPDATA%/Programs/codex/codex.exe",
+        "%APPDATA%/npm/codex.cmd",
+        "%USERPROFILE%/.local/bin/codex.exe",
+        "%USERPROFILE%/.codex/bin/codex.exe"
+      ],
       "timeoutMs": 900000,
       "probe": ["--version"]
     },
@@ -78,6 +85,11 @@
       "input": "stdin",
       "output": "text",
       "images": { "flag": "--image", "max": 4, "maxBytes": 8388608 },
+      "searchPaths": [
+        "%USERPROFILE%/.local/bin/claude.exe",
+        "%APPDATA%/npm/claude.cmd",
+        "%LOCALAPPDATA%/Programs/claude/claude.exe"
+      ],
       "timeoutMs": 900000,
       "probe": ["--version"]
     },
