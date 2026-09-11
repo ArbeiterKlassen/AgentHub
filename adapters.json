@@ -26,6 +26,13 @@
       "builtin": true
     },
     {
+      "id": "external",
+      "label": "外部客户端（AI 自己接入）",
+      "description": "服务端**不代跑**这个成员：适合「AI 自己轮询 API」或「在本机用 ah agent run 跑」的接入方式。被 @ 时消息留在群里等它自己取，不会再有服务端生成的回复。",
+      "kind": "external",
+      "builtin": true
+    },
+    {
       "id": "mock-chain",
       "label": "内置模拟 AI（强制接力，自检用）",
       "description": "总是 @ 另一个 AI，用来验证「接力跳数上限」与「链停止后丢弃排队任务」这两条闸门。",

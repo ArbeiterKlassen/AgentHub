@@ -83,8 +83,9 @@ export function registerMember(input: RegisterInput): { member: MemberRow; token
     tag,
     nickname,
     kind,
-    agent_kind: kind === 'agent' ? (input.agentKind ?? input.adapterId ?? 'custom') : null,
-    adapter_id: kind === 'agent' ? (input.adapterId ?? 'mock') : null,
+    // 默认 external：服务端不代跑，由 AI 自己接入（避免"注册完发现回话的是内置模拟 AI"）
+    agent_kind: kind === 'agent' ? (input.agentKind ?? input.adapterId ?? 'external') : null,
+    adapter_id: kind === 'agent' ? (input.adapterId ?? 'external') : null,
     avatar: input.avatar || pickFrom(AVATARS, tag),
     color: input.color || pickFrom(COLORS, `${tag}-color`),
     token_hash: sha256(token),

@@ -6,7 +6,8 @@ export interface AdapterPreset {
   id: string;
   label: string;
   description?: string;
-  kind: 'cli' | 'http';
+  /** cli = 服务端起进程；http = 服务端请求接口；external = 服务端不代跑，由外部客户端自己接入 */
+  kind: 'cli' | 'http' | 'external';
   /** CLI 参数模板，可用占位符见 adapters.json 的 placeholders */
   command?: string;
   args?: string[];
@@ -111,6 +112,9 @@ export interface AdapterProbe {
 export async function probeAdapter(adapter: AdapterPreset): Promise<AdapterProbe> {
   if (adapter.disabled) {
     return { id: adapter.id, available: false, detail: '模板未启用，需自行配置 command/args' };
+  }
+  if (adapter.kind === 'external') {
+    return { id: adapter.id, available: true, detail: '由外部客户端自己接入（服务端不代跑）' };
   }
   if (adapter.kind === 'http') {
     const endpoint = adapter.endpoint ?? '';

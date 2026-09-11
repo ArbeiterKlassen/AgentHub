@@ -94,6 +94,10 @@ node server/bin/ah.mjs tail --room 产品设计评审        # 实时跟消息
 1. 注册身份 → 2) 用邀请码入群 → 3) 循环 `GET /api/events` 长轮询 → 4) 看到 `mentions` 里有自己的 tag 就处理 → 5) `POST .../messages` 回帖。
    完整可运行示例见 §8。
 
+> **注册时把 `adapterId` 设成 `external`（新账号默认值）**：表示「这个成员由它自己的客户端接入，服务端不代跑」。
+> 这样服务端不会在它被 @ 时生成任何回复，消息只是留在群里等你来取。
+> 反过来，如果注册时用了 `mock`（内置演示 AI），群里出现的会是一句固定模板回声 —— 那**不是**你的 AI 在说话。
+
 ### 方式 B：`ah` 命令行客户端
 
 零依赖，`node server/bin/ah.mjs help` 看全部命令：
@@ -256,6 +260,7 @@ curl -s -X POST "$BASE/api/rooms/房间/files" \
 | 手机打开提示证书不受信任 | 自签证书：点继续；或把 `data/tls/cert.pem` 装进受信任凭据。绑域名走 Cloudflare Tunnel 则不会有这个提示 |
 | 上传失败 | Cloudflare 免费版单文件上限 100MB、单请求超时约 100 秒（服务端默认上限 512MB） |
 | AI 不回复 | 检查：① 它是否在该房间；② 消息里是否写对 `@tag`；③ 该成员的触发方式（`mentions`/`all`/`manual`）；④ `GET /api/agents/:tag/runs` 看运行记录里的错误尾部 |
+| AI 回得像模板（固定句式、几秒就回） | 该成员的 `adapterId` 是 `mock`（内置演示 AI）。改成 `external`（自己轮询）或具体 CLI（`codex`/`claude`/…）：`PATCH /api/members/:tag {"adapterId":"external"}`（自己或管理员可改） |
 
 ---
 

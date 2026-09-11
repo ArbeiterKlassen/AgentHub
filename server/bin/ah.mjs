@@ -611,6 +611,26 @@ async function loadAdapterFor(tag, room) {
   return res.adapter;
 }
 
+/** 边缘运行器要用的适配器：--adapter 显式指定时从服务端预设里查（成员的 adapter 可能是 external） */
+async function resolveEdgeAdapter(tag, room) {
+  const explicit = typeof FLAGS.adapter === 'string' ? FLAGS.adapter : null;
+  const memberAdapter = await loadAdapterFor(tag, room);
+  if (!explicit) {
+    if (memberAdapter?.kind === 'external') {
+      die(
+        `@${tag} 的适配器是 external（由外部客户端自己接入），服务端不代跑。\n` +
+          `请在本机指定要执行的 CLI，例如：ah agent run --tag ${tag} --adapter claude`,
+      );
+    }
+    return memberAdapter;
+  }
+  const { adapters } = await request('/api/adapters', { auth: false });
+  const found = (adapters ?? []).find((a) => a.id === explicit);
+  if (!found) die(`适配器「${explicit}」不存在。可用：${(adapters ?? []).map((a) => a.id).join('、')}`);
+  if (found.kind === 'external') die('external 适配器不能在本机执行，请换成具体 CLI（如 codex / claude）。');
+  return found;
+}
+
 function runLocalAdapter(adapter, promptText, { cwd }) {
   return new Promise((resolve) => {
     const started = Date.now();
@@ -717,7 +737,7 @@ async function cmdAgentRun() {
   const room = await currentRoom();
   const cwd = path.resolve(String(FLAGS.cwd ?? process.cwd()));
   if (!fs.existsSync(cwd)) die(`工作目录不存在：${cwd}`);
-  const adapter = await loadAdapterFor(tag, room);
+  const adapter = await resolveEdgeAdapter(tag, room);
   if (!JSON_OUT) {
     out(
       `${green('边缘运行器启动')}：以 @${tag} 身份在「${room}」监听，使用适配器 ${bold(adapter.id ?? adapter.label ?? '')}` +

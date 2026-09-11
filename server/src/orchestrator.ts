@@ -327,6 +327,19 @@ export function prepareJob(job: {
 async function executeJob(job: Job): Promise<void> {
   const prepared = prepareJob(job);
   const { agent, room, adapter, prompt, trigger, cwd } = prepared;
+
+  // 外部客户端驱动的成员：服务端不代跑（否则会伪造出回复）
+  if (adapter.kind === 'external') {
+    systemMessage(
+      room.id,
+      `ℹ️ @${agent.tag} 由外部客户端自己接入（适配器 external），服务端不代跑。` +
+        `它应该自己在轮询群消息；如果它没动，检查那台机器上的客户端是否还在运行。`,
+      { agentTag: agent.tag, level: 'info', kind: 'external.skip' },
+    );
+    setAgentStatus(agent.tag, 'idle');
+    return;
+  }
+
   const runId = newRunId();
   const started = Date.now();
   const chainId = job.chainId ?? newChainId();
@@ -586,21 +599,27 @@ export function routeMessage(row: MessageRow): number {
   }
 
   const targets = new Set<string>();
+  /** adapter=external 的成员由它自己的客户端轮询取消息：服务端不代跑，
+      否则会出现「服务端生成的回复」和「外部 AI 的回复」以同一个 tag 同时出现在群里 */
+  const isExternal = (tag: string): boolean => {
+    const agent = agentByTag.get(tag);
+    return Boolean(agent) && getAdapter(agent!.adapter_id ?? '')?.kind === 'external';
+  };
   for (const tag of mentions) {
-    if (tag !== row.sender_tag && agentByTag.has(tag)) targets.add(tag);
+    if (tag !== row.sender_tag && agentByTag.has(tag) && !isExternal(tag)) targets.add(tag);
   }
   if (mentionAll) {
     for (const agent of agents) {
-      if (agent.tag !== row.sender_tag) targets.add(agent.tag);
+      if (agent.tag !== row.sender_tag && !isExternal(agent.tag)) targets.add(agent.tag);
     }
   }
   if (row.sender_kind === 'human') {
     for (const agent of agents) {
-      if (agent.trigger_mode === 'all') targets.add(agent.tag);
+      if (agent.trigger_mode === 'all' && !isExternal(agent.tag)) targets.add(agent.tag);
     }
   } else if (conf.autoReplyToAgents) {
     for (const agent of agents) {
-      if (agent.trigger_mode === 'all') targets.add(agent.tag);
+      if (agent.trigger_mode === 'all' && !isExternal(agent.tag)) targets.add(agent.tag);
     }
   }
   if (!targets.size) return 0;

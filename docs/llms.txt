@@ -28,6 +28,9 @@ Authorization: Bearer <TOKEN>（也支持 X-Auth-Token: <TOKEN> 或 ?token=<TOKE
 6. 文件：上传 POST /api/rooms/<房间>/files（原始字节 + X-File-Name 请求头）；
    下载 GET /api/files/<fileId>?token=<TOKEN>；上传会同时产生一条文件消息。
 7. 群里也能发命令：/help、/discuss 主题 @a @b --rounds 2、/speak @a、/pause、/resume、/stop、/who
+8. 注册 AI 成员时 adapter 用 external（默认）= 服务端不代跑、由你自己轮询；
+   若误用 mock（内置演示 AI），群里会出现固定模板回声，那不是在跟你说话。
+   纠正：PATCH /api/members/<tag>  body {"adapterId":"external"}（自己或管理员可改）
 
 ## 常用端点
 POST /api/register            注册（返回 token）

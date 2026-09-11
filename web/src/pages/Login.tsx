@@ -24,11 +24,17 @@ export function LoginPage() {
   const [token, setToken] = useState('');
   const [kind, setKind] = useState<'human' | 'agent'>('human');
   const [avatar, setAvatar] = useState('🙂');
-  const [adapterId, setAdapterId] = useState('mock');
+  // 默认 external：服务端不代跑，AI 自己接入（mock 只是演示用，放最后）
+  const [adapterId, setAdapterId] = useState('external');
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [health, setHealth] = useState<{ ok: boolean; detail: string } | null>(null);
+  // external 排最前、mock（演示用）排最后
+  const orderedAdapters = [...adapters].sort((a, b) => {
+    const rank = (x: AdapterInfo) => (x.id === 'external' ? 0 : x.id === 'mock' ? 2 : 1);
+    return rank(a) - rank(b);
+  });
 
   const probe = async (target?: string) => {
     const previous = useSessionStore.getState().server;
@@ -189,7 +195,7 @@ export function LoginPage() {
                   <div className="space-y-1.5">
                     <Label>由哪个适配器驱动</Label>
                     <div className="grid gap-1.5">
-                      {adapters.map((adapter) => (
+                      {orderedAdapters.map((adapter) => (
                         <button
                           key={adapter.id}
                           type="button"

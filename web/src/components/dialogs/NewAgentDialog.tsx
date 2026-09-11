@@ -31,7 +31,8 @@ interface Props {
 export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
   const [tag, setTag] = useState('');
   const [nickname, setNickname] = useState('');
-  const [adapterId, setAdapterId] = useState('mock');
+  // 默认 external（服务端不代跑）；要服务端执行就选具体 CLI
+  const [adapterId, setAdapterId] = useState('external');
   const [avatar, setAvatar] = useState('🤖');
   const [workdir, setWorkdir] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
@@ -93,6 +94,11 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     : '';
 
   const selectedAdapter = adapters.find((a) => a.id === adapterId);
+  // external 排最前、mock（演示用）排最后，其余按服务端返回顺序
+  const orderedAdapters = [...adapters].sort((a, b) => {
+    const rank = (x: AdapterInfo) => (x.id === 'external' ? 0 : x.id === 'mock' ? 2 : 1);
+    return rank(a) - rank(b);
+  });
 
   return (
     <Dialog
@@ -170,7 +176,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                   <SelectValue placeholder="选择适配器" />
                 </SelectTrigger>
                 <SelectContent>
-                  {adapters.map((adapter) => (
+                  {orderedAdapters.map((adapter) => (
                     <SelectItem key={adapter.id} value={adapter.id}>
                       {adapter.available ? '🟢' : '⚪️'} {adapter.label}（{adapter.id}）
                     </SelectItem>
