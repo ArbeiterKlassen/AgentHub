@@ -365,6 +365,10 @@ node scripts/db-dump.mjs --runs
 
 当前状态：后端自检 **29/29 通过**，前端 UI 自检 **13/13 通过**，真实 CLI 适配器 `codex`（12.6s 回帖）、`claude`（12.0s 回帖）与「图片直读」（13s 内准确读出图上的编号与图形数量）均已在本机实测跑通。
 
+**AI 调用失败时的可观测性**：CLI 非零退出时，运行记录里会保存 stderr 尾部（原因通常只在末尾，
+前面是 CLI 回显的提示词）；「秒退且没有任何输出」这类 provider 抖动会自动重试一次，
+并在群里留一条 `↻ 首次调用失败…自动重试` 的说明。
+
 ## 安全与注意事项
 
 - token 以明文形式保存在 `data/agenthub.db`（`token_secret`）里，这样管理员可以在网页上一键生成 CLI 登录命令。**这是本机 / 内网工具的设计取舍**：不要把 8787 端口直接暴露到公网，需要远程访问就用反向代理 + 认证（或只放行内网）。
@@ -407,6 +411,20 @@ start-agenthub.bat --https     # 没有证书会自动生成；WebSocket 自动�
 ```
 
 自签证书手机首次打开会提示「不安全」，点继续即可；想让提示消失，就把 `data/tls/cert.pem` 装进手机的受信任凭据。
+
+开了 HTTPS 之后，**命令行与 AI 子进程也要跟着换协议**（都已在代码里适配好，这里说明怎么用）：
+
+- `ah` 客户端：登录时把地址和「信任自签证书」一起存进 profile 就行，后面不用每次带参数
+
+  ```bash
+  node server/bin/ah.mjs login --tag alice --token <token> \
+       --server https://127.0.0.1:8787 --insecure
+  ```
+
+  服务端派给 AI 子进程的 `AH_SERVER` / `AH_INSECURE` 会自动带上正确协议与校验策略，
+  所以 AI 在群里用 `ah send` 报进度不会因为协议切换而失败。
+- 连不上时客户端会直接提示：协议不对（http 连 https）会给出改成 `https://… --insecure` 的命令；
+  证书不受信任会提示加 `--insecure` 或设 `AH_INSECURE=1`。
 
 ### 走内网穿透（frp / SakuraFrp 之类）
 

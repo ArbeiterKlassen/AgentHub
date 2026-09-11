@@ -68,6 +68,8 @@ function loadProfile() {
     tag: FLAGS.tag ?? process.env.AH_TAG ?? stored.tag ?? null,
     token: FLAGS.token ?? process.env.AH_TOKEN ?? stored.token ?? null,
     room: FLAGS.room ?? process.env.AH_ROOM ?? stored.room ?? null,
+    // 自签 HTTPS 证书（例如本机 start-agenthub.bat --https 起的服务）
+    insecure: FLAGS.insecure === true || process.env.AH_INSECURE === '1' || stored.insecure === true,
   };
 }
 
@@ -80,6 +82,19 @@ function saveProfile(patch) {
 }
 
 const CONFIG = loadProfile();
+
+// 自签证书：只有在显式允许时才跳过校验（本地/内网自建服务用）
+if (CONFIG.insecure) {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+  // Node 会为这个环境变量打一条大字警告；我们已经在 --insecure 里明确告知过用户，这里把它过滤掉，
+  // 其余 warning 照旧打印。
+  const passThrough = process.listeners('warning');
+  process.removeAllListeners('warning');
+  process.on('warning', (w) => {
+    if (/NODE_TLS_REJECT_UNAUTHORIZED/.test(String(w?.message ?? ''))) return;
+    for (const fn of passThrough) fn(w);
+  });
+}
 
 /* -------------------------------- 输出 -------------------------------- */
 
@@ -150,7 +165,16 @@ async function request(pathname, { method = 'GET', body, headers = {}, raw = fal
   try {
     res = await fetch(url, { method, headers: finalHeaders, body: payload, duplex: raw ? 'half' : undefined });
   } catch (err) {
-    die(`无法连接 ${url}：${err.message}\n提示：先用 npm run dev 启动后端，或用 --server 指定地址`);
+    const msg = err?.message ?? String(err);
+    const tlsHint = /certificate|self-signed|unable to verify/i.test(msg)
+      ? '\n提示：服务用的是自签 HTTPS 证书，加 --insecure（或设 AH_INSECURE=1）即可跳过校验'
+      : '';
+    // 服务在 http / https 之间切换过时，最容易撞的就是「协议不对」这一类失败
+    const schemeHint = /fetch failed|ECONNREFUSED|socket hang up|wrong version number/i.test(msg)
+      ? `\n提示：如果服务是用 start-agenthub.bat --https 起的，请改用 https 地址并加 --insecure：` +
+        `\n      --server ${url.replace(/^http:/, 'https:')} --insecure`
+      : '';
+    die(`无法连接 ${url}：${msg}${tlsHint}${schemeHint}\n提示：先用 npm run dev 启动后端，或用 --server 指定地址`);
   }
   if (res.status === 204) return {};
   const text = await res.text();
@@ -222,6 +246,7 @@ ${bold('运维')}
   ah health | ah adapters | ah status
 
 ${dim('全局参数：--server URL --profile 名称 --tag TAG --token TOKEN --room 房间 --json')}
+${dim('HTTPS 自签证书：加 --insecure（或设 AH_INSECURE=1），例如 --server https://127.0.0.1:8787 --insecure')}
 ${dim(`当前 profile：${profileName}（${profilePath}）`)}`;
 
 async function cmdRegister() {
@@ -238,7 +263,7 @@ async function cmdRegister() {
     triggerMode: typeof FLAGS.trigger === 'string' ? FLAGS.trigger : undefined,
   };
   const res = await request('/api/register', { method: 'POST', body, auth: false });
-  const patch = { server: CONFIG.server, tag: res.member.tag, token: res.token };
+  const patch = { server: CONFIG.server, tag: res.member.tag, token: res.token, insecure: CONFIG.insecure };
   if (FLAGS.room) patch.room = String(FLAGS.room);
   saveProfile(patch);
   if (JSON_OUT) return out(res);
@@ -255,7 +280,7 @@ async function cmdLogin() {
   const token = String(FLAGS.token ?? ARGS[3] ?? '');
   if (!tag || !token) die('用法：ah login --tag alice --token <token>');
   const res = await request('/api/login', { method: 'POST', body: { tag, token }, auth: false });
-  saveProfile({ server: CONFIG.server, tag: res.member.tag, token });
+  saveProfile({ server: CONFIG.server, tag: res.member.tag, token, insecure: CONFIG.insecure });
   if (JSON_OUT) return out(res);
   out(`${green('登录成功')} @${res.member.tag}（${res.member.nickname}）${dim(`\n凭据已保存到 ${profilePath}`)}`);
 }

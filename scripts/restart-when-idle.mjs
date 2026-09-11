@@ -27,6 +27,10 @@ const flag = (name, fallback) => {
 };
 
 const PORT = Number(flag('port', process.env.AH_PORT ?? 8787));
+/** 服务可能跑在 https（自签证书）上：本机健康检查与自检子进程都要跟着换协议 */
+const TLS = Boolean(process.env.AH_TLS_CERT && process.env.AH_TLS_KEY);
+const SCHEME = TLS ? 'https' : 'http';
+if (TLS) process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 const FORCE = Boolean(flag('force', false));
 const MAX_WAIT_MS = Number(flag('max-wait', 45)) * 60 * 1000;
 const DATA_DIR = process.env.AH_DATA_DIR ?? path.join(REPO, 'data');
@@ -71,7 +75,7 @@ async function healthOk(timeoutMs = 2500) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`http://127.0.0.1:${PORT}/api/health`, { signal: controller.signal });
+    const res = await fetch(`${SCHEME}://127.0.0.1:${PORT}/api/health`, { signal: controller.signal });
     return res.ok;
   } catch {
     return false;
@@ -107,14 +111,19 @@ async function restart() {
   for (let i = 0; i < 20; i += 1) {
     await new Promise((r) => setTimeout(r, 1000));
     if (await healthOk()) {
-      log(`✅ 服务已重启并响应健康检查：http://127.0.0.1:${PORT}`);
+      log(`✅ 服务已重启并响应健康检查：${SCHEME}://127.0.0.1:${PORT}`);
       // 顺手跑一遍端到端自检，把「修复是否真的生效」写进日志
       log('开始跑端到端自检（node scripts/e2e-test.mjs）…');
       const summary = await new Promise((resolve) => {
         const child = spawn(process.execPath, [path.join(REPO, 'scripts', 'e2e-test.mjs')], {
           cwd: REPO,
           windowsHide: true,
-          env: { ...process.env, NO_COLOR: '1' },
+          env: {
+            ...process.env,
+            NO_COLOR: '1',
+            AH_SERVER: `${SCHEME}://127.0.0.1:${PORT}`,
+            ...(TLS ? { AH_INSECURE: '1', NODE_TLS_REJECT_UNAUTHORIZED: '0' } : {}),
+          },
         });
         let out = '';
         child.stdout.on('data', (d) => (out += String(d)));

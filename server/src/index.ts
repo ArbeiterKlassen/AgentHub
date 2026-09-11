@@ -4,7 +4,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import express from 'express';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { HOST, PORT, WEB_DIST, DATA_DIR, ensureDirs, lanAddresses, REPO_ROOT } from './env.js';
+import {
+  DATA_DIR,
+  HOST,
+  PORT,
+  REPO_ROOT,
+  TLS_CERT,
+  TLS_ENABLED,
+  TLS_KEY,
+  WEB_DIST,
+  ensureDirs,
+  lanAddresses,
+} from './env.js';
 import { buildApiRouter, serveWeb } from './api.js';
 import { authMiddleware, extractToken } from './auth.js';
 import { findMemberByToken, getDb, listRooms, listRoomMemberTags, isRoomMember } from './db.js';
@@ -51,13 +62,11 @@ app.use('/api', buildApiRouter());
  * 手机浏览器有些会把 http 强制升级成 https（Chrome 的「始终使用安全连接」），
  * 内网穿透服务通常也只给 https 地址，这两种情况都需要服务端能说 TLS。
  */
-const tlsCertPath = process.env.AH_TLS_CERT;
-const tlsKeyPath = process.env.AH_TLS_KEY;
-const tlsReady = Boolean(tlsCertPath && tlsKeyPath && fs.existsSync(tlsCertPath) && fs.existsSync(tlsKeyPath));
+const tlsReady = TLS_ENABLED;
 const scheme = tlsReady ? 'https' : 'http';
 const server = tlsReady
   ? https.createServer(
-      { cert: fs.readFileSync(tlsCertPath!), key: fs.readFileSync(tlsKeyPath!) },
+      { cert: fs.readFileSync(TLS_CERT), key: fs.readFileSync(TLS_KEY) },
       app,
     )
   : http.createServer(app);

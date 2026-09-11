@@ -27,6 +27,13 @@ export const UPLOAD_MAX_BYTES = Number(process.env.AH_UPLOAD_MAX ?? 512 * 1024 *
 /** 前端构建产物，存在时由后端直接托管（单端口部署） */
 export const WEB_DIST = path.join(REPO_ROOT, 'web', 'dist');
 
+/** 可选 HTTPS：设了这两个路径且文件存在，就用 https 起服务（WebSocket 自动变 wss） */
+export const TLS_CERT = process.env.AH_TLS_CERT ?? '';
+export const TLS_KEY = process.env.AH_TLS_KEY ?? '';
+export const TLS_ENABLED = Boolean(TLS_CERT && TLS_KEY && fs.existsSync(TLS_CERT) && fs.existsSync(TLS_KEY));
+/** 服务自己对外用的协议（本机自检、派生给 AI 子进程的 AH_SERVER 都按它来） */
+export const SERVER_SCHEME = TLS_ENABLED ? 'https' : 'http';
+
 /** 适配器预设：仓库根 adapters.json，可被数据目录同名文件覆盖 */
 export const ADAPTERS_FILE = path.join(REPO_ROOT, 'adapters.json');
 export const ADAPTERS_OVERRIDE_FILE = path.join(DATA_DIR, 'adapters.json');

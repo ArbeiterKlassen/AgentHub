@@ -31,6 +31,13 @@ export interface AgentRunResult {
 const ANSI_RE = /\u001b\[[0-9;?]*[a-zA-Z]/g;
 const stripAnsi = (s: string): string => s.replace(ANSI_RE, '');
 
+/** 取字符串尾部若干字符，并把过长的空白压掉，用于展示 CLI 的报错尾部 */
+function tailOf(input: string, maxChars: number): string {
+  const text = input.replace(/\r\n/g, '\n').trim();
+  const tail = text.length > maxChars ? `…${text.slice(-maxChars)}` : text;
+  return tail.replace(/\n{3,}/g, '\n\n');
+}
+
 const MIME_BY_EXT: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -405,7 +412,11 @@ async function runCliAdapter(opts: AgentRunOptions): Promise<AgentRunResult> {
         ok: code === 0,
         text,
         exitCode: code,
-        error: code === 0 ? undefined : `退出码 ${code}${stderr ? `：${stderr.trim().slice(0, 300)}` : ''}`,
+        // CLI 失败时真正的原因在 stderr 的末尾（前面通常是它回显的提示词），所以取尾部而不是开头
+        error:
+          code === 0
+            ? undefined
+            : `退出码 ${code}${stderr ? `：${tailOf(stderr, 500)}` : stdout ? `：${tailOf(stdout, 300)}` : ''}`,
       });
     });
 

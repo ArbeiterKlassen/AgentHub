@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR, PORT, REPO_ROOT, ROOM_DEFAULTS } from './env.js';
+import { DATA_DIR, PORT, REPO_ROOT, ROOM_DEFAULTS, SERVER_SCHEME, TLS_ENABLED } from './env.js';
 import {
   findMember,
   findRoom,
@@ -384,7 +384,7 @@ async function executeJob(job: Job): Promise<void> {
 
   let run;
   try {
-    run = await runAdapter({
+    const runOptions = {
       adapter,
       prompt,
       cwd,
@@ -398,13 +398,29 @@ async function executeJob(job: Job): Promise<void> {
       },
       // 让 AI 在长任务里能自己发进度/传文件：环境变量里直接带上它的身份与房间
       extraEnv: {
-        AH_SERVER: `http://127.0.0.1:${PORT}`,
+        // 服务自身可能是 https（自签证书）：给子进程的地址与证书校验开关都要跟着走，
+        // 否则 AI 想用 `ah send` 报进度时会连不上自己的服务。
+        AH_SERVER: `${SERVER_SCHEME}://127.0.0.1:${PORT}`,
         AH_TAG: agent.tag,
         AH_TOKEN: agent.token_secret,
         AH_ROOM: room.name,
+        ...(TLS_ENABLED ? { AH_INSECURE: '1', NODE_TLS_REJECT_UNAUTHORIZED: '0' } : {}),
       },
       imageFiles: prepared.images,
-    });
+    };
+    run = await runAdapter(runOptions);
+    // 「秒退 + 没有任何输出」基本是 provider / 网络抖动（实测遇到过：11 秒退出码 1、无输出），
+    // 重试一次即可；真失败（超时、跑完才报错）不重试，避免重复扣费。
+    if (!run.ok && !run.text.trim() && run.durationMs < 60_000) {
+      systemMessage(
+        room.id,
+        `↻ @${agent.tag} 首次调用失败（${run.error ?? '未知错误'}），2 秒后自动重试一次…`,
+        { runId, agentTag: agent.tag, chainId, level: 'warn', kind: 'run.retry' },
+      );
+      await new Promise((r) => setTimeout(r, 2000));
+      const retry = await runAdapter(runOptions);
+      run = retry.ok || retry.text.trim() ? { ...retry, error: undefined } : retry;
+    }
   } finally {
     clearInterval(heartbeat);
     releaseSlot();
@@ -416,7 +432,10 @@ async function executeJob(job: Job): Promise<void> {
     exit_code: run.exitCode,
     duration_ms: run.durationMs,
     error: run.error ?? null,
-    output: run.stdout.slice(-20_000),
+    // 运行记录里同时留下 stdout 与 stderr 尾部：排查「CLI 退出码 1」这类问题时，原因通常只在 stderr 末尾
+    output: [run.stdout, run.stderr ? `\n--- stderr ---\n${run.stderr.slice(-6000)}` : '']
+      .join('')
+      .slice(-20_000),
   });
 
   broadcast({
