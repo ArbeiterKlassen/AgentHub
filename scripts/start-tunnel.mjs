@@ -82,6 +82,13 @@ const serviceLine = configText.split(/\r?\n/).find((l) => /^\s*service:\s*\S+/.t
 const serviceUrl = (serviceLine.split('service:')[1] ?? '').trim();
 const wantScheme = serviceUrl.startsWith('http://') ? 'http' : serviceUrl.startsWith('https://') ? 'https' : '?';
 const hostPort = (serviceUrl.match(/https?:\/\/([^/\s]+)/) ?? [])[1] ?? '127.0.0.1:8787';
+/**
+ * 公网域名从隧道配置里读（ingress 的 hostname），不在代码里写死：
+ * 写死等于把本机的真实域名印进仓库，而配置在 data/ 下、不进版本库。
+ */
+const configHosts = [...configText.matchAll(/^\s*-\s*hostname:\s*(\S+)/gm)].map((m) => m[1]);
+const publicHost =
+  configHosts.find((h) => h.startsWith('agenthub.')) ?? configHosts[0] ?? (process.env.AH_PUBLIC_HOST ?? '').trim();
 console.log(`  隧道配置   ${path.relative(REPO, CONFIG)}`);
 console.log(`  源地址     ${c.cyan(serviceUrl)}`);
 console.log('');
@@ -155,7 +162,11 @@ if (liveScheme !== wantScheme) {
 
 console.log(c.green(`  [OK] 预检通过：本机服务以 ${liveScheme.toUpperCase()} 正常响应。`));
 console.log('');
-console.log(`  公网访问   ${c.cyan('https://agenthub.soyorin.work')}`);
+if (publicHost) {
+  console.log(`  公网访问   ${c.cyan(`https://${publicHost}`)}`);
+} else {
+  console.log(c.dim('  公网访问   见 CF 控制台里给这个隧道配的 hostname（本机配置里没读到 hostname 行）'));
+}
 console.log(`  ${c.yellow('停止隧道')}   在这个窗口按 Ctrl+C`);
 console.log('');
 

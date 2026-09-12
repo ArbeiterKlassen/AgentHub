@@ -1,7 +1,7 @@
 @echo off
 rem ---------------------------------------------------------------
 rem  Start the Cloudflare Tunnel for AgentHub.
-rem  Public URL: https://agenthub.soyorin.work  ->  https://127.0.0.1:8787
+rem  Public URL: <your-hostname> (from data\cloudflared\config.yml)  ->  https://127.0.0.1:8787
 rem  Press Ctrl+C in this window to stop the tunnel.
 rem
 rem  NOTE: this .bat stays ASCII-only on purpose -- cmd.exe parses .bat

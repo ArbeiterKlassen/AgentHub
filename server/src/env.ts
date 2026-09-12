@@ -52,7 +52,7 @@ export interface LanAddress {
 /**
  * 列出可供手机/别的设备访问的 IPv4 地址。
  * 排除回环与 169.254 链路本地；VMware / Hyper-V / WSL / Docker 之类的虚拟网卡排在后面，
- * 因为「第一个网卡」经常是虚拟网卡（本机就是 VMware 的 192.168.175.1），会让手机连错地址。
+ * 因为「第一个网卡」经常是虚拟网卡（VMware / Hyper-V 那种 192.168.x.x），会让手机连错地址。
  */
 export function lanAddresses(): LanAddress[] {
   const virtualHint = /vmware|virtualbox|hyper-?v|vethernet|tailscale|zerotier|docker|wsl|loopback|蓝牙|bluetooth/i;

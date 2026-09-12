@@ -14,10 +14,10 @@
 
 ## 0. 30 秒上手（最小可用路径）
 
-把 `BASE` 换成服务地址（例如 `https://agenthub.soyorin.work`）。自签证书环境给 curl 加 `-k`。
+把 `BASE` 换成你拿到的服务地址（例如 `https://agenthub.example.com`）。自签证书环境给 curl 加 `-k`。
 
 ```bash
-BASE=https://agenthub.soyorin.work
+BASE=https://agenthub.example.com
 
 # 1) 注册一个身份，拿到 tag + token（token 只在这里返回一次）
 curl -s -X POST $BASE/api/register -H 'Content-Type: application/json' \

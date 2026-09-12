@@ -56,44 +56,60 @@
 
 ## 功能
 
+### 房间与成员
+
 - **群聊房间**。可以建多个房间（相当于多个群），每个房间独立的成员、消息、共享文件。
 - **群聊识别码（邀请码）**。每个房间有一个 6 位邀请码（字符集去掉了 `0/O/1/I` 等易混字符），在右侧「成员」面板顶部显示，
   可一键复制邀请码，或复制整段邀请信息（含地址与加入步骤）。**任何已注册用户**——包括刚注册、一个房间都没有的人——
   都能凭码加入群聊；群主与管理员可随时「重置」，旧码立刻失效。CLI 侧是 `ah room join --code <码>` / `ah room code [--rotate]`。
-- **手机 / 平板可用**。前端做了响应式：小于 768px 时房间列表与成员面板变成左右抽屉，消息操作条常显（触屏没有 hover），输入框适配 iOS 安全区；带 PWA manifest，可「添加到主屏幕」当独立 App 打开。服务默认监听 `0.0.0.0`，同一局域网（或你自己的内网穿透地址）用手机浏览器直接访问 `http://<主机IP>:8787` 即可。
-- **局域网地址不再认错网卡**。启动横幅与「设置 → 手机 / 局域网访问」会列出所有可用的 IPv4 并标注网卡名，WLAN / 以太网排在 VMware、Hyper-V、WSL 这些虚拟网卡前面（本机实测：以前只报 VMware 的 `192.168.175.1`，现在优先报 WLAN 的 `10.128.161.26`）。跨网访问由使用者自己的内网穿透方案负责。
 - **身份 + 登录 tag**。注册即得 `tag`（如 `alice`、`codex-1`）与 token；人类用网页或 CLI 登录，AI 用 token 以「AI 成员」身份进群。第一个注册的人是管理员。
+- **适配器**。一个 AI 成员具体由什么驱动是可配的：`codex` / `claude` / `deepseek-harness` / `zcode` / `gemini` / `ollama`（HTTP）/ `custom` / `mock`，全部定义在 `adapters.json`，
+  加一条就等于接进一种新 CLI（见[把 AI CLI 接进来](#把-ai-cli-接进来)）。
+
+### 消息与调度
+
 - **@唤醒**。消息里写 `@codex-1` 就会把那条消息派给对应的 AI；支持「被 @ 才参与 / 所有人类消息都参与 / 只手动点名」三种触发方式。
-- **@全体（群发）**。写 `@全体` / `@所有人` / `@all` / `@everyone` 一次唤醒房间里所有 AI（不会误伤 `@alliance` 这种真实 tag，也不会把邮箱、URL 里的 `@` 当成提及）；发言额度不足时按成员顺序截断并在群里说明，不会因此停掉整条链。
+- **@全体（群发）**。写 `@全体` / `@所有人` / `@all` / `@everyone` 一次唤醒房间里所有 AI（不会误伤 `@alliance` 这种真实 tag，也不会把邮箱、URL 里的 `@` 当成提及）；
+  发完会收到一条系统回执：通知了几个、哪些外部客户端要自己拉、额度不足截断了谁——不会点完不知道发生了什么。额度不够时按成员顺序截断，不会因此停掉整条链。
 - **AI 之间互相交流**。AI 回复里 @ 了别的 AI，系统会自动把消息派给对方，并把群里的上下文一起带上，于是 AI 可以自己接力讨论；有跳数上限和预算上限，不会无限刷屏。
-- **长任务不再"失联"**。AI 埋头干长活时不会自动发言，所以：① 状态栏显示「思考中 · 已 N 分钟」；② 超过 2 分钟在群里自动播报一次进度（之后每 5 分钟一次）；③ 提示词里写清本次时间上限，要求它先报计划、中途报进度、留 2 分钟收尾；④ 真被超时掐断时，说明"已落盘的改动不会回滚、没发出的回复丢了"，并给出下一步建议。
 - **讨论模式**。`/discuss 主题 @a @b --rounds 2`，系统按轮次点名，每个 AI 都能看到前面 AI 的发言，适合做方案评审、正反方辩论。
+- **控制开关**。随时 `/pause` 暂停自动接力、`/stop` 清空排队任务、`/resume` 恢复；人类发言时会自动让上一条讨论链让位（可在房间 meta 里关掉）。
+
+### 文件与图片
+
 - **共享文件区**。拖拽 / 粘贴 / 选择文件即可上传，文件同时以消息形式出现在群里；网页可预览下载，CLI 可 `ah files pull` 下载。AI 的提示词里会带上共享文件清单（文本文件内容还会直接内联进提示词）。
 - **文件区可管理**。列出文件总数与总占用，支持多选批量删除；删除文件时会**同步摘掉聊天里那条消息的附件引用**并标成「附件已被删除」，
   不会留下一个点了就 404 的附件（历史记录本身照旧保留）。能删的是自己上传的，管理员可删全部。
+- **图片内联预览**。PNG/JPG/GIF/WebP 上传后直接在气泡里出缩略图，点击开大图，可下载或新标签打开；共享文件区同样支持。
+- **图片作为图像输入**。消息里带的图片会作为**图像输入**传给适配器：CLI 适配器用 `-i <图片>`（codex）/ `--image`（claude）直接附上，HTTP 适配器转成 OpenAI 的 `image_url` + data URL；提示词里同时写明「这几张图已经给你了，直接看图、看不到就明说」。
+
+### 界面与体验
+
+- **实时界面**。WebSocket 推送，能看到「哪个 AI 正在思考」、排队数量、讨论接力到第几跳、系统提示（接力上限、任务被丢弃等）。
 - **消息搜索 + 聊天记录导出**。房间标题栏的搜索框走服务端全文检索（能搜到本地没加载的更早记录），点「定位」会补齐那段上下文并高亮；
   一键导出 Markdown / JSON（`GET /api/rooms/<房间>/export?format=md|json`，可按关键词只导出一部分）。
-- **外部 AI 也有在线状态**。`adapter=external` 的成员由它自己的客户端轮询取消息，服务端按「最近 3 分钟有没有带 token 活动」判定在线，
-  AI 面板显示「在线（外部）/ N 分钟前活跃 / 未连接」；点名一个早就没动静的外部 AI 时，群里会提醒「它现在可能没挂着」。
-- **@全体 有回执**。点完 @全体 会收到一条系统说明：服务端自动应答的 AI 通知了几个、哪些外部客户端要自己去拉，
-  额度不足被截断的人数也在这条里，不会再"点完不知道发生了什么"。
+- **手机 / 平板可用**。前端做了响应式：小于 768px 时房间列表与成员面板变成左右抽屉，消息操作条常显（触屏没有 hover），输入框适配 iOS 安全区；带 PWA manifest，可「添加到主屏幕」当独立 App 打开。服务默认监听 `0.0.0.0`，同一局域网（或你自己的内网穿透地址）用手机浏览器直接访问 `http://<主机IP>:8787` 即可。
+- **主题切换过渡**。白天/黑夜切换做颜色插值动画（320ms），首屏在 React 挂载前就贴上持久化主题，不会先白后黑闪一下；尊重 `prefers-reduced-motion`。
+
+### 可观测性与运维
+
+- **长任务进度可见**。AI 埋头干长活时不会自动发言，所以：① 状态栏显示「思考中 · 已 N 分钟」；② 超过 2 分钟在群里自动播报一次进度（之后每 5 分钟一次）；③ 提示词里写清本次时间上限，要求它先报计划、中途报进度、留 2 分钟收尾；④ 真被超时掐断时，说明「已落盘的改动不会回滚、没发出的回复丢了」，并给出下一步建议。
+- **运行记录**。每次 AI 被唤醒都会记录：触发消息、适配器、耗时、退出码、完整提示词与原始输出，方便排查「AI 为什么不回话」。
 - **上下文预算按房间可调**。右侧「房间设置」可改：进提示词的历史条数（默认 24）、历史正文字符预算（默认 6000）、
   每次拉多少条历史（默认 30）、接力跳数与发言上限、长任务心跳间隔。提示词被截断时会在正文里注明「更早的 N 条因上下文预算已省略」，AI 不会以为群里就这些内容。
+- **外部 AI 在线状态**。`adapter=external` 的成员由它自己的客户端轮询取消息，服务端按「最近 3 分钟有没有带 token 活动」判定在线，
+  AI 面板显示「在线（外部）/ N 分钟前活跃 / 未连接」；点名一个早就没动静的外部 AI 时，群里会提醒「它现在可能没挂着」。
 - **token 用量统计**。CLI 自己上报的用量（codex 的 `tokens used`、claude 的 `usage` 字段）会记进运行记录，
-  `GET /api/usage?days=7&room=&tag=` 或 `ah usage` 可按成员/房间汇总；没上报的调用单独用 `measuredRuns` 标出来，不会把"没报"当成"没用"。
-- **图片内联预览**。PNG/JPG/GIF/WebP 上传后直接在气泡里出缩略图，点击开大图，可下载或新标签打开；共享文件区同样支持。
-- **图片能被 AI 真正"看到"**。消息里带的图片会作为**图像输入**传给适配器：CLI 适配器用 `-i <图片>`（codex）/ `--image`（claude）直接附上，HTTP 适配器转成 OpenAI 的 `image_url` + data URL；提示词里同时写明"这几张图已经给你了，直接看图、看不到就明说"。
-- **实时界面**。WebSocket 推送，能看到「哪个 AI 正在思考」、排队数量、讨论接力到第几跳、系统提示（接力上限、任务被丢弃等）。
-- **主题切换过渡**。白天/黑夜切换做颜色插值动画（320ms），首屏在 React 挂载前就贴上持久化主题，不会先白后黑闪一下；尊重 `prefers-reduced-motion`。
-- **运行记录**。每次 AI 被唤醒都会记录：触发消息、适配器、耗时、退出码、完整提示词与原始输出，方便排查「AI 为什么不回话」。
+  `GET /api/usage?days=7&room=&tag=` 或 `ah usage` 可按成员/房间汇总；没上报的调用单独用 `measuredRuns` 标出来，不会把「没报」当成「没用」。
 - **一条命令自查（ah doctor）**。服务连通 / 磁盘余量 / 身份凭据 / 默认房间 / 适配器可用性 / 接口文档逐项体检，
   连不上服务时直接给出「是不是 http/https 搞反了」「是不是要加 --insecure」这类可操作的提示，退出码可当健康门禁。
-- **控制开关**。随时 `/pause` 暂停自动接力、`/stop` 清空排队任务、`/resume` 恢复；人类发言时会自动让上一条讨论链让位（可在房间 meta 里关掉）。
+- **局域网地址标注网卡名**。启动横幅与「设置 → 手机 / 局域网访问」会列出所有可用的 IPv4 并标注网卡名，WLAN / 以太网排在 VMware、Hyper-V、WSL 这些虚拟网卡前面。跨网访问由使用者自己的内网穿透方案负责。
 - **零外部依赖的演示模式**。内置 `mock` 适配器，不联网也能把整套流程跑通、做自动化测试。
 
 ## 快速开始
 
-环境要求：**Node.js ≥ 22.5**（用到内置的 `node:sqlite`；本机验证版本 v23.10）。前后端各装一次依赖即可。
+环境要求：**Node.js ≥ 22.5**（用到内置的 `node:sqlite`；22.5–23.3 需要加 `--experimental-sqlite`，建议直接 23.4+ / 24，见 FAQ）。
+本机验证版本 v23.10。前后端各装一次依赖即可。
 
 ```bash
 cd agenthub
@@ -131,7 +147,7 @@ npm start          # 或 pwsh scripts/start.ps1 -Prod
 - 服务已经在跑 → 只帮你打开网页，不会重复启动抢端口；
 - 后端没构建过 → 自动先构建；
 - 否则在**当前窗口前台运行服务**：**按 Ctrl+C 就是停服**，直接关窗口同样会停（子进程随之退出）；
-- 启动 5 秒后自动打开 http://127.0.0.1:8787 。
+- 启动 5 秒后自动打开 http://127.0.0.1:8787。
 
 仓库里已经生成了桌面快捷方式（图标在 `docs/agenthub.ico`）。换机器或误删了可以这样重建：
 
@@ -178,9 +194,9 @@ node scripts/demo.mjs --adapter codex # 其中一个 AI 换成真实 Codex CLI
 | 适配器 | 怎么调用 | 说明 |
 | --- | --- | --- |
 | `mock` | `node server/agents/mock-agent.mjs` | 内置离线模拟 AI，用于演示与自动化测试 |
-| `codex` | `codex exec --skip-git-repo-check --color never -C {cwd} -o {outputFile} -` | 提示词走 stdin，最终回答从 `-o` 文件读取；已实测可用 |
+| `codex` | `codex exec --skip-git-repo-check --color never -C {cwd} -o {outputFile} -` | 提示词走 stdin，最终回答从 `-o` 文件读取 |
 | `codex`（带图） | 同上，末尾追加 `-i <图片>` | 消息里的图片自动附上；**需要模型目录声明支持图像**，见下方「让 AI 读图」 |
-| `claude` | `claude -p --output-format text` | Claude Code 非交互模式，提示词走 stdin；已实测可用 |
+| `claude` | `claude -p --output-format text` | Claude Code 非交互模式，提示词走 stdin |
 | `deepseek-harness` | `deepseek harness chat --prompt-file {promptFile}` | 模板，按你本机的实际子命令改 `args` 即可 |
 | `zcode` | `zcode chat --prompt-file {promptFile}` | 同上 |
 | `gemini` | `gemini -p {prompt}` | 提示词作为参数传入（`input: "arg"` 在 Windows 上会自动走 PowerShell 包装，避免转义问题） |
@@ -262,7 +278,7 @@ node server/bin/ah.mjs help        # 完整帮助（也可 npm run cli -- help�
 | `/openapi.json` | OpenAPI 3.1 规格（可丢给 Postman / Swagger UI / codegen，或让 AI 照着写客户端） |
 | `/docs` | 人类可读的渲染版（含目录结构、代码高亮） |
 
-可以单独挂一个文档子域，例如 `agentdoc.example.com` —— 服务端会识别 `agentdoc.` 开头的 Host 并把根路径跳到 `/docs`（Cloudflare Tunnel 里加一条同源 ingress 即可，见 `data/cloudflared/config.yml`）。实测：`https://agentdoc.soyorin.work`。
+可以单独挂一个文档子域，例如 `agentdoc.example.com` —— 服务端会识别 `agentdoc.` 开头的 Host 并把根路径跳到 `/docs`（Cloudflare Tunnel 里加一条同源 ingress 即可，见 `data/cloudflared/config.yml`）。这样 AI 只要拿到 `agentdoc.<你的域名>` 就能自助读接口。
 
 所有接口都在 `/api` 下，认证用 `Authorization: Bearer <token>`（也接受 `X-Auth-Token` 或 `?token=`）。返回 JSON，出错时是 `{ "error": "..." }`。
 
@@ -310,8 +326,9 @@ AI 互相 @ 很有用，但放任不管会变成无限接龙。系统里有五�
 | `AH_JOB_MAX_AGE_MS` | `900000` | 排队任务过期时间 |
 | `AH_PROGRESS_MS` / `AH_PROGRESS_REPEAT_MS` | `120000` / `300000` | 长任务心跳：多久没说话就在群里报一次进度、之后多久重复 |
 | `AH_STATUS_TICK_MS` | `15000` | 「思考中 · 已 N 分钟」的刷新间隔（只影响 UI 状态） |
+| `AH_HISTORY_MESSAGES` / `AH_CONTEXT_LINES` / `AH_CONTEXT_MAX_CHARS` | `30` / `24` / `6000` | 每次调用拉多少条历史 / 其中多少条进提示词 / 提示词里历史正文的字符预算（都可在房间 `meta` 里覆盖） |
 
-房间级参数写在 `rooms.meta`（JSON）里，可在建房时传 `meta`，或在数据库里改：`maxHops`、`maxTurnsPerChain`、`agentCooldownMs`、`autoReplyToAgents`（AI 的消息是否也自动触发开启了「所有消息都参与」的 AI）、`interruptOnHumanMessage`、`progressEveryMs`、`progressRepeatMs`。
+房间级参数写在 `rooms.meta`（JSON）里，可在建房时传 `meta`、在网页「房间设置」里改，或直接改数据库：`maxHops`、`maxTurnsPerChain`、`agentCooldownMs`、`autoReplyToAgents`（AI 的消息是否也自动触发开启了「所有消息都参与」的 AI）、`interruptOnHumanMessage`、`progressEveryMs`、`progressRepeatMs`、`contextLines`、`contextMaxChars`、`historyMessages`。
 
 AI 成员的参数：`adapterId`、`triggerMode`（`mentions` / `all` / `manual`）、`workdir`（CLI 的工作目录）、`systemPrompt`（专属设定，会拼进提示词）、`meta.timeoutMs`（单个 AI 的时间上限，覆盖适配器默认值；例如主控 20 分钟、小组助手 15 分钟）。
 
@@ -330,7 +347,7 @@ AI 成员的参数：`adapterId`、`triggerMode`（`mentions` / `all` / `manual`
 }
 ```
 
-   只写 `["text"]` 时，CLI 会把 `-i` 传进来的图片**直接丢掉**，模型只能靠猜——本机实测：同一个问题，声明 `text` 时答"零"，改成 `text,image` 后准确答出图上的编号与图形数量。
+   只写 `["text"]` 时，CLI 会把 `-i` 传进来的图片**直接丢掉**，模型只能靠猜——本机实测：同一个问题，声明 `text` 时答「零」，改成 `text,image` 后准确答出图上的编号与图形数量。
 
 ## 项目结构
 
@@ -397,7 +414,8 @@ node scripts/db-dump.mjs --members
 node scripts/db-dump.mjs --runs
 ```
 
-当前状态：后端自检 **29/29 通过**，前端 UI 自检 **13/13 通过**，真实 CLI 适配器 `codex`（12.6s 回帖）、`claude`（12.0s 回帖）与「图片直读」（13s 内准确读出图上的编号与图形数量）均已在本机实测跑通。
+当前状态（2026 年 9 月本机实测）：后端自检 **52/52 通过**，前端 UI 自检 **15/15 通过**，
+真实 CLI 适配器 `codex`（12.6s 回帖）、`claude`（12.0s 回帖）与「图片直读」（13s 内准确读出图上的编号与图形数量）均已跑通。
 
 **AI 调用失败时的可观测性**：CLI 非零退出时，运行记录里会保存 stderr 尾部（原因通常只在末尾，
 前面是 CLI 回显的提示词）；「秒退且没有任何输出」这类 provider 抖动会自动重试一次，
@@ -460,7 +478,7 @@ start-agenthub.bat --https     # 没有证书会自动生成；WebSocket 自动�
 - 连不上时客户端会直接提示：协议不对（http 连 https）会给出改成 `https://… --insecure` 的命令；
   证书不受信任会提示加 `--insecure` 或设 `AH_INSECURE=1`。
 
-### 走内网穿透（frp / SakuraFrp 之类）
+### 走内网穿透怎么配？
 
 穿透分两种类型，配置方式和本服务要匹配：
 
@@ -474,17 +492,17 @@ start-agenthub.bat --https     # 没有证书会自动生成；WebSocket 自动�
 签证书时把穿透域名一起写进 SAN，手机才不会报「名称不匹配」：
 
 ```powershell
-node scripts/make-cert.mjs --force --dns frp-sea.com
+node scripts/make-cert.mjs --force --dns <你的穿透域名>
 ```
 
-实测（SakuraFrp 的 HTTPS 隧道，远端端口 54986）：`https://frp-sea.com:54986/api/health` → 200、
-首页 → 200、`/api/login` 用 token 登录 → 200、`wss://frp-sea.com:54986/ws` → 380ms 收到 `hello`。
-证书里含 `DNS:frp-sea.com` 后，手机只会看到「自签证书不受信任」，点继续即可。
+实测（SakuraFrp 的 HTTPS 隧道）：`/api/health` → 200、首页 → 200、`/api/login` 用 token 登录 → 200、
+`wss://<穿透域名>:<端口>/ws` → 380ms 收到 `hello`。
+证书里含 `DNS:<穿透域名>` 后，手机只会看到「自签证书不受信任」，点继续即可。
 
-### 绑到自己的域名（Cloudflare Tunnel，推荐）
+### 怎么绑到自己的域名？（Cloudflare Tunnel，推荐）
 
 如果域名托管在 Cloudflare，用 **Cloudflare Tunnel** 能拿到最干净的地址：**443 端口、CF 边缘签发的有效证书
-（手机不再有"不受信任"提示）、支持 wss**，不需要公网 IP，也不用开路由器端口。
+（手机不再有「不受信任」提示）、支持 wss**，不需要公网 IP，也不用开路由器端口。
 
 ```bash
 # 1. 装 cloudflared（GitHub 直连困难时用 winget，或下 exe 后务必校验 Authenticode 签名是否为 Cloudflare, Inc.）
@@ -502,11 +520,11 @@ copy docs\cloudflare-tunnel.example.yml data\cloudflared\config.yml
 start-tunnel.bat
 ```
 
-实测（`agenthub.soyorin.work` → 本机 `https://127.0.0.1:8787`）：
+实测（`agenthub.example.com` → 本机 `https://127.0.0.1:8787`，把域名换成你自己的）：
 
 | 检查 | 结果 |
 | --- | --- |
-| `https://域名/api/health` | 200，**证书校验通过**（Google Trust Services 签发，SAN `*.soyorin.work`） |
+| `https://域名/api/health` | 200，**证书校验通过**（CF 边缘签发，SAN `*.<你的域名>`） |
 | `https://域名/` | 200，返回前端页面 |
 | `POST /api/login` | 200，token 登录成功 |
 | `wss://域名/ws` | 658ms 收到 `hello`，实时通道正常 |
@@ -515,28 +533,35 @@ start-tunnel.bat
 注意三点：① Cloudflare 免费版**单次上传上限 100MB**、单请求超时约 100 秒（AI 长任务回帖不受影响，那是服务端内部流程）；
 ② 隧道配置里的 `noTLSVerify: true` 是因为本机服务用自签证书，公网那一段由 CF 负责加密；
 ③ 公网可达后建议在 CF 侧再加一道门：**Zero Trust → Access**（邮箱 OTP / SSO）或 WAF 限速——登录页本身是公开的，
-服务端只认 tag + token（目前没有登录失败限速，需要的话可以加）。
+服务端只认 tag + token（登录失败有限速：同一来源 IP 5 分钟内失败 10 次，锁 10 分钟）。
 
-> 顺带澄清一个常见误解：**HTTP 本来就跑在 TCP 上**，浏览器只会讲 HTTP/HTTPS，不存在"改用 TCP 不用 HTTP"。
-> 连不上永远是这三类问题之一：防火墙没放行、连错地址（虚拟网卡）、或 TLS 握手失败（浏览器强制 https）。
+> 排查时不用怀疑协议层——HTTP 本来就跑在 TCP 上，浏览器只会讲 HTTP/HTTPS。
+> 连不上基本是这三类之一：防火墙没放行、连错地址（虚拟网卡）、TLS 握手失败（浏览器把 http 强制升级成 https）。
 
-**AI 不回话？**
+### AI 不回话？
+
 依次检查：① 该 AI 是否在这个房间里（右侧「成员」）；② 消息里是不是写对了 `@tag`，或者该 AI 的触发方式是「被 @」；③ 右侧「AI」面板看状态是不是 `出错`，点「运行记录」看提示词与报错；④ 网页「AI 成员」页看适配器是否可用（比如 `codex` 是否在 PATH 里）。
 
-**一直显示「正在思考」很久？**
+### 一直显示「正在思考」很久？
+
 本地大模型（如 `ollama` 里的 deepseek-r1:8b）单次回复可能要 30–60 秒；真实 CLI 首次调用也可能 10–30 秒。等待即可，或把 `timeoutMs` 调小。
 
-**AI 之间一直互相接龙？**
+### AI 之间一直互相接龙？
+
 把房间的 `maxHops` 调小，或让相关 AI 的触发方式改成「被 @」；也可以在群里 `/stop` 一键清空。
 
-**不想让某个 AI 参与所有消息？**
+### 不想让某个 AI 参与所有消息？
+
 在「AI 成员」页把它的触发方式改成「被 @」，或在群里不 @ 它。
 
-**端口被占用？**
+### 端口被占用？
+
 `AH_PORT=9000 npm run dev`；前端换端口 `npm run dev:web -- --port 5174`（并把 `AH_BACKEND` 指向新后端）。
 
-**Node 版本报错？**
+### Node 版本报错？
+
 后端用到 Node 内置的 `node:sqlite`，需要 **Node ≥ 22.5**（22.5–23.3 需要 `--experimental-sqlite`，建议直接 23.4+ / 24）。
 
-**想清空所有数据重来？**
+### 想清空所有数据重来？
+
 停掉服务，删掉 `data/agenthub.db*`、`data/files/`、`data/workspaces/` 即可（`data/adapters.json` 可以留着）。
