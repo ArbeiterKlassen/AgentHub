@@ -274,6 +274,36 @@ async function main() {
   check('AI 成员在界面上完成回帖', Boolean(replied));
   await screenshot('02-chat');
 
+  /**
+   * 4b. 系统消息气泡形状：单行是胶囊、多行必须是普通圆角卡片。
+   * （回归用：/help 那种多行输出曾经用 rounded-full，圆角被夹到高度的一半，
+   *  左右变成两个大圆弧、文字压在弧线上，看着像个畸形的蛋。）
+   */
+  await evaluate(`(() => {
+    const el = document.querySelector('textarea');
+    if (!el) return false;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(el, '/help');
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+    return true;
+  })()`);
+  const helpShown = await waitFor(
+    `!![...document.querySelectorAll('div.max-w-2xl')].find((d) => (d.textContent || '').includes('可用命令'))`,
+    { label: '/help 的系统消息' },
+  ).catch(() => false);
+  const bubbleMetrics = await evaluate(`(() => {
+    const el = [...document.querySelectorAll('div.max-w-2xl')].find((d) => (d.textContent || '').includes('可用命令'));
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { h: Math.round(r.height), radius: parseFloat(getComputedStyle(el).borderTopLeftRadius) };
+  })()`);
+  check(
+    '多行系统消息用圆角卡片（不是被夹成半圆的胶囊）',
+    Boolean(helpShown) && bubbleMetrics !== null && bubbleMetrics.radius < bubbleMetrics.h / 4,
+    bubbleMetrics ? `高 ${bubbleMetrics.h}px / 圆角 ${bubbleMetrics.radius}px` : '没量到气泡',
+  );
+
   // 5. 共享文件区
   const uploaded = await evaluate(`(async () => {
     const session = JSON.parse(localStorage.getItem('agenthub-session') || '{}');

@@ -68,11 +68,18 @@ export function MessageItem({ message, members, files, replyTo, onReply, onDelet
 
   if (isSystem) {
     const level = String(message.meta?.level ?? 'info');
+    /**
+     * 单行系统消息用胶囊形（rounded-full）好看，多行的就必须换成普通圆角：
+     * border-radius:9999px 会被浏览器夹到「高度的一半」，于是 /help、/who 这种多行消息
+     * 会变成左右两个巨大半圆弧，文字压到弧线上（看起来像个畸形的蛋）。
+     */
+    const multiline = message.text.includes('\n');
     return (
       <div className="my-2 flex justify-center px-4">
         <div
           className={cn(
-            'flex max-w-2xl items-start gap-2 rounded-full border px-3 py-1.5 text-xs text-muted-foreground',
+            'flex max-w-2xl items-start gap-2 border px-3 text-xs text-muted-foreground',
+            multiline ? 'rounded-2xl py-2 leading-relaxed' : 'rounded-full py-1.5',
             level === 'warn' && 'border-amber-500/40 text-amber-600 dark:text-amber-400',
             level === 'error' && 'border-destructive/40 text-destructive',
           )}
