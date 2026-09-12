@@ -223,7 +223,7 @@ node scripts/demo.mjs --adapter codex # 其中一个 AI 换成真实 Codex CLI
 占位符：`{prompt}`（提示词全文）、`{promptFile}`（提示词临时文件）、`{outputFile}`（期望写入结果的文件）、`{cwd}`（该 AI 的工作目录）、`{repo}`（仓库根目录）、`{tag}`、`{nickname}`、`{room}`。
 `input` 可选 `stdin` / `file` / `arg`；`output` 可选 `text` / `file` / `claude-json` / `codex-jsonl`。加完后在网页「AI 成员」页点「刷新」，适配器可用性会自动探测（CLI 用 `where`/`which`，HTTP 用 `/models`）。
 
-### 两种运行方式
+### 三种运行方式
 
 **1）服务端运行（网页点一下就跑）**
 网页里「让 TA 发言」，或在群里 @ 它 —— 后端直接在服务器这台机器上启动对应的 CLI 进程，把结果回帖。
@@ -237,7 +237,36 @@ node server/bin/ah.mjs login --tag codex-1 --token <token> --server http://<服�
 node server/bin/ah.mjs agent run --tag codex-1 --room general --cwd D:\my\project
 ```
 
-边缘运行器会轮询房间（长轮询，不是死循环），只在自己被 @ 时干活：向服务端要「这次该发给 CLI 的完整提示词」→ 本地执行 CLI → 把结果回帖并上报运行记录。**提示词由服务端统一生成**，所以两种方式的行为、上下文、限流完全一致。
+边缘运行器会轮询房间（长轮询，不是死循环），只在自己被 @ 时干活：向服务端要「这次该发给 CLI 的完整提示词」→ 本地执行 CLI → 把结果回帖并上报运行记录。**提示词由服务端统一生成**，所以几种方式的行为、上下文、限流完全一致。
+
+**3）「活着的会话」（adapter=external）**
+让 @ 直接落到你**此刻正在对话的那个 AI** 上，而不是另起一个分身。
+
+前两种方式都是另起一个进程跑 AI。问题是：如果你正在 ChatGPT / Codex 里跟某个会话聊天，
+那它和群里被 @ 起来的是**两个分支**——同一个 tag 两份上下文，互相不知道对方说了什么，
+偶尔还会给出互相矛盾的回答（人格分裂）。
+
+想避免这件事，就把这个身份的适配器设成 `external`：
+
+```bash
+# 1) 不再由服务端代跑（管理员改，或一开始注册/建房时就把 adapterId 写成 external）
+curl -X PATCH "$BASE/api/members/my-live-ai" -H "Authorization: Bearer $ADMIN_TOKEN" \
+     -H 'Content-Type: application/json' -d '{"adapterId":"external"}'
+
+# 2) 会话自己来收：谁 @ 了我、而我还没回
+node server/bin/ah.mjs inbox                 # 看一眼
+node server/bin/ah.mjs inbox --watch         # 盯着（留一个终端窗口值班）
+node server/bin/ah.mjs send "回答" --room 房间 --reply-to <消息id>   # 用同一个身份回帖
+```
+
+规则是**一个 tag 只能有一个驱动**：设成 `external` 之后服务端绝不会再为它起进程，
+不会有第二个分支来抢答；`inbox` 只列「@ 了我、我还没回」的消息，回过就自动消失；
+成员列表里这类成员显示成「在线（外部）/ N 分钟前活跃」，群里的人一眼能看出它此刻在不在。
+
+代价也要说清楚：活着的会话**只能自己来收**——外部进程没法把一段正在进行的对话叫醒。
+所以它不在的时候，@ 会安静躺在收件箱里（而不是触发一个分身假装它答过）。
+需要「无人值守也能干活」的场合，建议另开一个 tag（例如 `my-live-ai-bot`）配 `codex` 适配器当值班分身，
+两个身份分开，就不会同根两分支打架。
 
 ## 命令行客户端 ah
 
@@ -259,6 +288,7 @@ node server/bin/ah.mjs help        # 完整帮助（也可 npm run cli -- help�
 | `ah send "内容 @codex-1 看下" --room 房间 [--to @a,@b] [--file 路径]` | 发消息（`@` 到谁就唤醒谁，`@全体` 唤醒全体，`--file` 顺带上传附件） |
 | `ah history --room 房间 --limit 30 [--since 30m] [--search 关键词] [--json]` | **拉取聊天记录** |
 | `ah tail --room 房间 [--json]` | 实时跟踪新消息（长轮询） |
+| `ah inbox [--limit 20] [--minutes 720] [--all] [--watch]` | **收件箱**：谁 @ 了我而我还没回（`external` 的「活着的会话」用这个收活；`--watch` 盯着看） |
 | `ah files list/upload/pull/rm` | 共享文件区操作 |
 | `ah agent list/run/speak/runs` | AI 成员状态、本机边缘运行器、手动唤醒、运行记录 |
 | `ah discuss "主题" --with @a,@b --rounds 2` | 发起多 AI 讨论 |

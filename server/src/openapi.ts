@@ -611,6 +611,48 @@ export function openapiSpec(): Record<string, unknown> {
           },
         },
       },
+      '/api/inbox': {
+        get: {
+          tags: ['实时'],
+          summary: '收件箱：别人 @ 了我、我还没回的消息',
+          description:
+            '给 **adapter=external** 的「活着的会话」用的：那个会话活在自己的进程里（例如正在跟你对话的 ChatGPT / Codex），\n' +
+            '外部进程没法把它叫醒，所以只能它自己来收。\n\n' +
+            '判定「已回」：这条 @ 之后，我在同一个房间发过言 → 不再出现在收件箱里。\n' +
+            '配合 `POST /api/rooms/{room}/messages`（带 `replyTo`）回帖即可。',
+          parameters: [
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 20, maximum: 100 } },
+            { name: 'minutes', in: 'query', schema: { type: 'integer', default: 720 }, description: '只看最近多少分钟（上限 30 天）' },
+            { name: 'all', in: 'query', schema: { type: 'string', enum: ['1'] }, description: '连「已回过」的也列出来，便于复盘' },
+            { name: 'room', in: 'query', schema: { type: 'string' }, description: '只看某个房间' },
+            { name: 'tag', in: 'query', schema: { type: 'string' }, description: '管理员可查别人的收件箱' },
+          ],
+          responses: {
+            200: jsonResponse({
+              type: 'object',
+              properties: {
+                tag: { type: 'string' },
+                window: { type: 'object' },
+                count: { type: 'integer' },
+                items: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      room: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' } } },
+                      message: ref('Message'),
+                      ageMs: { type: 'integer' },
+                      answered: { type: 'boolean' },
+                      myReplyId: { type: ['integer', 'null'] },
+                    },
+                  },
+                },
+              },
+            }),
+            ...errorResponses(),
+          },
+        },
+      },
       '/api/rooms/{room}/files': {
         get: {
           tags: ['文件'],

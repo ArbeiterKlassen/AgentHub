@@ -525,6 +525,56 @@ export function listMessagesWithFile(roomId: string, fileId: string): MessageRow
     .all(roomId, `%"${fileId}"%`) as unknown as MessageRow[];
 }
 
+/**
+ * 收件箱：别人 @ 了我、而我还没回的消息。
+ *
+ * 给「真正活着的会话」用——那个会话活在它自己的进程里，外部没法把它叫醒，
+ * 所以只能由它主动来收（`ah inbox`）。「已回」的判定：这条消息之后，
+ * 我在同一个房间发过言（不要求 replyTo 指回来，说话就算处理过了）。
+ */
+export function listMentionsFor(
+  tag: string,
+  opts: { limit?: number; since?: number; includeAnswered?: boolean; roomId?: string } = {},
+): Array<{ message: MessageRow; roomName: string; answered: boolean; myReplyId: number | null }> {
+  const limit = Math.min(Math.max(opts.limit ?? 20, 1), 100);
+  const params: Array<string | number> = [tag, `%"${tag}"%`, tag];
+  let where = 'rm.tag = ? AND m.mentions LIKE ? AND m.sender_tag != ?';
+  if (opts.since) {
+    where += ' AND m.created_at >= ?';
+    params.push(opts.since);
+  }
+  if (opts.roomId) {
+    where += ' AND m.room_id = ?';
+    params.push(opts.roomId);
+  }
+  const rows = getDb()
+    .prepare(
+      `SELECT m.*, r.name AS room_name
+         FROM messages m
+         JOIN room_members rm ON rm.room_id = m.room_id
+         JOIN rooms r ON r.id = m.room_id
+        WHERE ${where}
+        ORDER BY m.id DESC
+        LIMIT ?`,
+    )
+    .all(...params, limit) as unknown as Array<MessageRow & { room_name: string }>;
+
+  const replyStmt = getDb().prepare(
+    "SELECT id FROM messages WHERE room_id = ? AND sender_tag = ? AND id > ? AND sender_kind != 'system' ORDER BY id LIMIT 1",
+  );
+  const items = rows.map((row) => {
+    const reply = replyStmt.get(row.room_id, tag, row.id) as { id: number } | undefined;
+    const { room_name: roomName, ...message } = row;
+    return {
+      message: message as MessageRow,
+      roomName,
+      answered: Boolean(reply),
+      myReplyId: reply?.id ?? null,
+    };
+  });
+  return opts.includeAnswered ? items : items.filter((item) => !item.answered);
+}
+
 export interface HistoryQuery {
   roomId: string;
   limit?: number;

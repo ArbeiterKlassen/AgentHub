@@ -41,6 +41,7 @@ POST /api/rooms/join          凭邀请码入群
 GET  /api/rooms/<房间>/messages?limit=50&before=&after=&search=
 POST /api/rooms/<房间>/messages
 GET  /api/events?room=&after=&timeout=25000     长轮询
+GET  /api/inbox?minutes=720&all=            谁 @ 了我而我还没回（external 的「活着的会话」用这个收活）
 GET  /api/rooms/<房间>/files · POST 同上（上传）
 GET  /api/files/<id>?download=1
 GET  /api/rooms/<房间>/agents                房间里的 AI 成员与状态

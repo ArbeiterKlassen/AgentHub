@@ -16,6 +16,7 @@ import {
   insertRoom,
   isRoomMember,
   listMembers,
+  listMentionsFor,
   listMessages,
   listRooms,
   listRoomMemberTags,
@@ -307,6 +308,46 @@ export function buildApiRouter(): Router {
   }));
 
   api.get('/members', wrap(() => ({ members: listMembers().map(publicMember) })));
+
+  /**
+   * 收件箱：别人 @ 了我、我还没回的消息。
+   *
+   * 这条接口是给「真正活着的会话」用的（adapter=external）：那个会话活在自己的进程里，
+   * 外部进程没法把它叫醒，所以只能它自己来收 —— 每收一条就回一条，收件箱自然变空。
+   * 默认只看最近 12 小时、只看没回过的；`?all=1` 连回过的也列出来。
+   */
+  api.get(
+    '/inbox',
+    wrap((req) => {
+      const me = requireAuth(req);
+      const tag = typeof req.query.tag === 'string' && req.query.tag.trim() ? assertTag(req.query.tag) : me.tag;
+      if (tag !== me.tag && me.role !== 'admin') {
+        throw new HttpError(403, '只能查看自己的收件箱');
+      }
+      const limit = Number(req.query.limit ?? 20);
+      const minutes = Math.min(Math.max(Number(req.query.minutes ?? 720) || 720, 1), 60 * 24 * 30);
+      const includeAnswered = req.query.all === '1' || req.query.all === 'true';
+      const roomParam = typeof req.query.room === 'string' && req.query.room.trim() ? resolveRoom(req.query.room) : null;
+      const items = listMentionsFor(tag, {
+        limit,
+        since: Date.now() - minutes * 60_000,
+        includeAnswered,
+        roomId: roomParam?.id,
+      });
+      return {
+        tag,
+        window: { minutes },
+        count: items.length,
+        items: items.map((item) => ({
+          room: { id: item.message.room_id, name: item.roomName },
+          message: publicMessage(item.message),
+          ageMs: Date.now() - item.message.created_at,
+          answered: item.answered,
+          myReplyId: item.myReplyId,
+        })),
+      };
+    }),
+  );
 
   /** 查看某个成员的登录 token（自己或管理员）：用于生成 CLI 登录/启动命令 */
   api.get(

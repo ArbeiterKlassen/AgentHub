@@ -547,6 +547,41 @@ async function run() {
     `${Object.keys(openapi.data.paths ?? {}).length} 个路径`,
   );
 
+  /* 19b. 收件箱：external 成员（活着的会话）怎么收到 @ */
+  const inboxTag = `live-${suffix}`;
+  await register(inboxTag, '活体会话', { kind: 'agent', adapterId: 'external' });
+  await api(`/api/rooms/${ROOM}/members`, { method: 'POST', token: tokens[alice], body: { tag: inboxTag } });
+  const runsBefore = (await api(`/api/agents/${inboxTag}/runs?limit=20`, { token: tokens[alice] })).data.runs?.length ?? 0;
+  const asked = await api(`/api/rooms/${ROOM}/messages`, {
+    method: 'POST',
+    token: tokens[alice],
+    body: { text: `@${inboxTag} 收件箱测试：请回一句` },
+  });
+  await sleep(1500);
+  const runsAfter = (await api(`/api/agents/${inboxTag}/runs?limit=20`, { token: tokens[alice] })).data.runs?.length ?? 0;
+  check('external 成员被 @ 时服务端不会另起进程', runsAfter === runsBefore, `运行记录 ${runsBefore} → ${runsAfter}`);
+
+  const inbox = await api('/api/inbox?minutes=10', { token: tokens[inboxTag] });
+  const hit = (inbox.data.items ?? []).find((i) => i.message.id === asked.data.message.id);
+  check('这条 @ 出现在它的收件箱里', Boolean(hit), `收件箱 ${inbox.data.count} 条｜房间 ${hit?.room.name ?? '-'}`);
+
+  const answered = await api(`/api/rooms/${ROOM}/messages`, {
+    method: 'POST',
+    token: tokens[inboxTag],
+    body: { text: '收到，我是活着的那个会话。', replyTo: asked.data.message.id },
+  });
+  const inboxAfter = await api('/api/inbox?minutes=10', { token: tokens[inboxTag] });
+  check(
+    '会话自己回过之后，收件箱不再催这条',
+    answered.ok && !(inboxAfter.data.items ?? []).some((i) => i.message.id === asked.data.message.id),
+    `剩余 ${inboxAfter.data.count} 条`,
+  );
+  const inboxAll = await api('/api/inbox?minutes=10&all=1', { token: tokens[inboxTag] });
+  check(
+    '?all=1 能看到「已回过」的记录用来复盘',
+    (inboxAll.data.items ?? []).some((i) => i.message.id === asked.data.message.id && i.answered === true),
+  );
+
   /* 20. 解散房间：群主可删自己建的、管理员可删任意，并且磁盘文件一并清掉 */
   const strangerTag = `stranger-${suffix}`;
   await register(strangerTag, '路人');

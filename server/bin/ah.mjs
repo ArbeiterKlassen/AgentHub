@@ -238,6 +238,7 @@ ${bold('消息')}
   ah send "大家好 @codex-1 帮忙看下这个方案" [--room general] [--to @claude-1]
   ah history [--room general] [--limit 20] [--since 30m] [--search 关键字] [--json]
   ah tail [--room general] [--interval 1] [--json]
+  ah inbox [--limit 20] [--minutes 720] [--all] [--watch]   # 谁在 @ 我而我还没回（活着的会话用这个收活）
 
 ${bold('共享文件')}
   ah files list [--room general]
@@ -507,6 +508,70 @@ async function cmdTail() {
     }
     if (FLAGS.once) return;
     if (interval) await new Promise((r) => setTimeout(r, interval));
+  }
+}
+
+/**
+ * 收件箱：别人 @ 了我、而我还没回的消息。
+ *
+ * 这个命令是给「真正活着的会话」用的 —— 例如 ChatGPT/Codex 里正在跟你对话的那个会话：
+ * 它活在自己的进程里，外部没法把它叫醒，所以只能由它自己来收。
+ *   ah inbox                    看一眼还有谁在等我
+ *   ah inbox --watch            盯着（每 10 秒刷一次），有新 @ 就打印出来
+ *   ah inbox --all --minutes 60 连回过的、只限最近 1 小时
+ */
+async function cmdInbox() {
+  needAuth();
+  const limit = Number(FLAGS.limit ?? 20);
+  const minutes = Number(FLAGS.minutes ?? 720);
+  const interval = Math.max(Number(FLAGS.interval ?? 10), 2);
+  const query = new URLSearchParams({ limit: String(limit), minutes: String(minutes) });
+  if (FLAGS.all) query.set('all', '1');
+  if (FLAGS.room) query.set('room', String(FLAGS.room));
+  if (FLAGS.tag) query.set('tag', String(FLAGS.tag));
+
+  const fetchInbox = () => request(`/api/inbox?${query.toString()}`);
+  const render = (item) => {
+    const age = Math.round(item.ageMs / 60000);
+    const who = `@${item.message.senderTag}（${item.message.senderNickname}）`;
+    const head =
+      `${bold(`【${item.room.name}】`)} #${item.message.id} ${dim(`${age} 分钟前`)} ${who}` +
+      (item.answered ? dim(`（已回过 #${item.myReplyId}）`) : '');
+    const body = String(item.message.text)
+      .split('\n')
+      .map((l) => `  ${l}`)
+      .join('\n');
+    const hint = dim(`  ↳ 回复：ah send "你的回答" --room ${JSON.stringify(item.room.name)} --reply-to ${item.message.id}`);
+    return `${head}\n${body}\n${hint}`;
+  };
+
+  if (!FLAGS.watch) {
+    const res = await fetchInbox();
+    if (JSON_OUT) return out(res);
+    if (!res.count) {
+      return out(`收件箱是空的（最近 ${minutes} 分钟内没有等你回应的 @）。`);
+    }
+    return out(`${bold(`等你回应的 ${res.count} 条`)}（@${res.tag}）\n\n${res.items.map(render).join('\n\n')}`);
+  }
+
+  // 盯梢模式：只打印新出现的条目，适合留一个终端窗口给"活着的会话"值班
+  const seen = new Set();
+  out(dim(`正在盯着 @${CONFIG.tag} 的收件箱（每 ${interval} 秒查一次，Ctrl+C 退出）…`));
+  for (;;) {
+    let res;
+    try {
+      res = await fetchInbox();
+    } catch (err) {
+      out(dim(`（查询失败，${interval} 秒后重试：${err?.message ?? err}）`));
+      await new Promise((r) => setTimeout(r, interval * 1000));
+      continue;
+    }
+    for (const item of res.items) {
+      if (seen.has(item.message.id)) continue;
+      seen.add(item.message.id);
+      out(`\n${yellow('新 @')} ${fmtTime(item.message.createdAt)}\n${render(item)}`);
+    }
+    await new Promise((r) => setTimeout(r, interval * 1000));
   }
 }
 
@@ -1076,6 +1141,7 @@ const table = {
   send: cmdSend,
   history: cmdHistory,
   tail: cmdTail,
+  inbox: cmdInbox,
   files: cmdFiles,
   agent: cmdAgent,
   discuss: cmdDiscuss,
