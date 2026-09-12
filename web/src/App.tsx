@@ -11,6 +11,7 @@ import { syncApiConfig } from '@/stores/chat';
 import { useUiStore } from '@/stores/ui';
 import { applyThemeClass } from '@/lib/theme';
 import { log } from '@/lib/logger';
+import { apiClient } from '@/lib/api';
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const token = useSessionStore((s) => s.token);
@@ -25,6 +26,17 @@ export default function App() {
   useEffect(() => {
     syncApiConfig();
     log.info('AgentHub 前端启动');
+    /**
+     * 启动时用 token 拉一次自己的资料：昵称、头像、尤其是**角色**可能在服务端被改过
+     * （例如被提为管理员，见 scripts/set-role.mjs）。只依赖登录时的那份快照，
+     * 界面会一直停在旧状态——管理员按钮不出现，用户只能靠重新登录才能看到。
+     */
+    const { token, setMember } = useSessionStore.getState();
+    if (!token) return;
+    void apiClient
+      .me()
+      .then((res) => setMember(res.member))
+      .catch((err: unknown) => log.warn('刷新自己的资料失败（不影响使用）', err));
   }, []);
 
   useEffect(() => {

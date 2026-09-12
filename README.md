@@ -366,6 +366,7 @@ agenthub/
 │   ├── ui-test.mjs             # 前端 UI 自动化自检（13 项）
 │   ├── capture-screenshots.mjs # 采集 README 截图
 │   ├── prune-test-members.mjs  # 清理自检留下的空号/测试房间（默认只预览）
+│   ├── set-role.mjs            # 改成员角色（管理员提权；默认只预览，--apply 才写库）
 │   ├── restart-when-idle.mjs   # 等没有 AI 在跑时重启服务（让改动安全生效）
 │   ├── check-lan.mjs           # 局域网体检：防火墙 / 网络位置 / 可用地址
 │   ├── fix-lan-access.ps1      # 管理员脚本：放行端口 + 网络改「专用」
@@ -404,6 +405,10 @@ node scripts/ui-test.mjs --launch
 
 # 清理自检留下的空号与测试房间（默认只预览，加 --apply 才真删，删前自动备份数据库）
 node scripts/prune-test-members.mjs
+
+# 改成员角色（第一个注册的人默认就是管理员；提权没有 API，只能在服务所在机器上做，默认只预览）
+node scripts/set-role.mjs                                  # 列出所有人的角色
+node scripts/set-role.mjs --tag <tag> --role admin --apply # 提为管理员
 
 # 重新采集 README 截图（建议对着一个 AH_DATA_DIR 指向临时目录的演示实例跑）
 node scripts/capture-screenshots.mjs --launch --app http://127.0.0.1:8899 --tag <tag> --token <token> --room <房间>
