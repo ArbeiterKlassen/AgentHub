@@ -61,6 +61,16 @@ import {
 import { parseMentions } from './prompt.js';
 import { sha256 } from './db.js';
 import { PORT, REPO_ROOT, lanAddresses } from './env.js';
+import { check as rateCheck, recordFailure as rateFail, recordSuccess as rateOk } from './rateLimit.js';
+
+/** 取来源 IP（经过 Cloudflare Tunnel 时优先用 CF 带过来的真实 IP） */
+function clientIp(req: Request): string {
+  const cf = req.headers['cf-connecting-ip'];
+  if (typeof cf === 'string' && cf.trim()) return cf.trim();
+  const xff = req.headers['x-forwarded-for'];
+  if (typeof xff === 'string' && xff.trim()) return xff.split(',')[0].trim();
+  return req.ip ?? req.socket.remoteAddress ?? 'unknown';
+}
 
 type Handler = (req: Request, res: Response) => unknown | Promise<unknown>;
 
@@ -160,13 +170,33 @@ export function buildApiRouter(): Router {
   api.post(
     '/login',
     wrap((req) => {
-      const body = (req.body ?? {}) as { tag?: string; token?: string };
-      const tag = assertTag(String(body.tag ?? ''));
-      const member = findMember(tag);
-      if (!member) throw new HttpError(404, `没有找到 tag「${tag}」`);
-      if (!body.token || sha256(body.token) !== member.token_hash) {
-        throw new HttpError(401, '登录 token 不正确');
+      // 登录限速：公网可达，不能让别人无限次猜 token
+      const ip = clientIp(req);
+      const limit = rateCheck(`login:${ip}`);
+      if (limit.blocked) {
+        throw new HttpError(
+          429,
+          `登录失败次数过多，请 ${Math.ceil(limit.retryAfterSec / 60)} 分钟后再试（或联系管理员重置 token）`,
+        );
       }
+      const body = (req.body ?? {}) as { tag?: string; token?: string };
+      let member: MemberRow;
+      try {
+        const tag = assertTag(String(body.tag ?? ''));
+        const found = findMember(tag);
+        if (!found) throw new HttpError(404, `没有找到 tag「${tag}」`);
+        if (!body.token || sha256(body.token) !== found.token_hash) {
+          throw new HttpError(401, '登录 token 不正确');
+        }
+        member = found;
+      } catch (err) {
+        const state = rateFail(`login:${ip}`);
+        if (state.blocked) {
+          console.warn(`[rate-limit] 登录失败过多，已锁定 ${ip} ${Math.round(state.retryAfterSec / 60)} 分钟`);
+        }
+        throw err;
+      }
+      rateOk(`login:${ip}`);
       return { member: publicMember(member), token: member.token_secret };
     }),
   );

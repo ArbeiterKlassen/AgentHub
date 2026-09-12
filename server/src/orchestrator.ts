@@ -27,7 +27,7 @@ import {
   messageToTranscript,
   type TranscriptLine,
 } from './prompt.js';
-import { newChainId, postMessage, systemMessage } from './messages.js';
+import { newChainId, postMessage, removeSystemMessage, systemMessage, updateSystemMessage } from './messages.js';
 import { broadcast, setAgentStatus, setQueueDepth } from './hub.js';
 import { HttpError, newRunId } from './auth.js';
 
@@ -55,6 +55,15 @@ interface ChainState {
   lastAt: number;
   stopped: boolean;
   discussion?: boolean;
+  /**
+   * 为什么停的：
+   *   stopped    —— 跳数/预算上限、/stop：在跑的结果没有意义了，丢弃
+   *   superseded —— 人类发了新消息让位：正在生成的那一条**仍然发出来**（标记为"回复较早消息"），
+   *                 只丢弃还在排队、尚未开工的任务（不白烧算力）
+   */
+  reason?: 'stopped' | 'superseded';
+  /** 让位时那条新消息的 id，用于在群里标注"回复较早消息" */
+  supersededBy?: number;
 }
 
 const queues = new Map<string, Job[]>();
@@ -101,6 +110,7 @@ function dropChainJobs(chainId: string): number {
 function stopChain(chain: ChainState, reason: string, roomId: string, chainId: string): void {
   if (chain.stopped) return;
   chain.stopped = true;
+  chain.reason = 'stopped';
   const dropped = dropChainJobs(chainId);
   systemMessage(roomId, `${reason}${dropped ? `，已丢弃排队中的 ${dropped} 个任务` : ''}`, {
     chainId,
@@ -121,6 +131,7 @@ function interruptRoomChains(roomId: string): { stopped: number; dropped: number
     const hasRunning = (runningJobs.get(id) ?? 0) > 0;
     if (!hasQueued && !hasRunning) continue; // 已经跑完、只是还没清理的空链，不必打扰用户
     chain.stopped = true;
+    chain.reason = 'superseded';
     stopped += 1;
     dropped += dropChainJobs(id);
   }
@@ -410,6 +421,16 @@ async function executeJob(job: Job): Promise<void> {
   const progressRepeatMs = Number((conf as Record<string, unknown>).progressRepeatMs ?? ROOM_DEFAULTS.progressRepeatMs);
   const label = trigger ? `回应 #${trigger.id}` : '主动发言';
   let lastProgressAt = 0;
+  let progressMsgId: number | null = null;
+
+  // 上次进程被杀等情况可能留下「仍在处理」的心跳消息，开工前先清掉同房间同 agent 的旧心跳
+  for (const stale of listMessages({ roomId: room.id, limit: 100 })) {
+    if (stale.sender_tag !== agent.tag) continue;
+    if (parseJson<Record<string, unknown>>(stale.meta, {}).kind === 'run.progress') {
+      removeSystemMessage(stale.id);
+    }
+  }
+
   const heartbeat = setInterval(() => {
     const elapsed = Date.now() - started;
     const minutes = Math.max(1, Math.round(elapsed / 60000));
@@ -417,12 +438,17 @@ async function executeJob(job: Job): Promise<void> {
     if (elapsed < progressEveryMs) return;
     if (lastProgressAt && elapsed - lastProgressAt < progressRepeatMs) return;
     lastProgressAt = elapsed;
-    systemMessage(
-      room.id,
+    const text =
       `⏳ @${agent.tag}（${agent.nickname}）仍在处理（${label}，已 ${minutes} 分钟）。` +
-        `它在闷头做长活时不会自动发言，如需中止：发送 /stop（或在 AI 面板点「全部停止」）。`,
-      { runId, agentTag: agent.tag, chainId, level: 'info', kind: 'run.progress' },
-    );
+      `它在闷头做长活时不会自动发言，如需中止：发送 /stop（或在 AI 面板点「全部停止」）。`;
+    const meta = { runId, agentTag: agent.tag, chainId, level: 'info', kind: 'run.progress' };
+    if (progressMsgId === null) {
+      // 第一次：发一条心跳
+      progressMsgId = systemMessage(room.id, text, meta).id;
+    } else {
+      // 之后：原地改写这一条，而不是每 2 分钟刷一条新的（系统消息曾经占全群 25%）
+      updateSystemMessage(progressMsgId, text, meta);
+    }
   }, ROOM_DEFAULTS.statusTickMs);
   heartbeat.unref?.();
 
@@ -467,6 +493,8 @@ async function executeJob(job: Job): Promise<void> {
     }
   } finally {
     clearInterval(heartbeat);
+    // 任务结束：把心跳消息收掉（进度只在跑的时候需要看，留在群里就是噪音）
+    if (progressMsgId !== null) removeSystemMessage(progressMsgId);
     releaseSlot();
     runningJobs.set(chainId, Math.max(0, (runningJobs.get(chainId) ?? 1) - 1));
   }
@@ -516,9 +544,12 @@ async function executeJob(job: Job): Promise<void> {
     return;
   }
 
-  // 跑到一半时讨论链可能已经因为跳数上限/被停止而结束：这时丢弃这条迟到回帖
+  // 跑到一半时链可能已经结束：
+  //   reason='stopped'（跳数/预算上限、/stop）→ 丢弃，回帖没有意义了
+  //   reason='superseded'（人类发了新消息让位）→ **照常发出来**，只是标记为「回复较早消息」，
+  //     毕竟这次 AI 调用已经烧掉了（平均 20–200 秒），丢掉纯属浪费
   const liveChain = chains.get(chainId);
-  if (liveChain?.stopped) {
+  if (liveChain?.stopped && liveChain.reason !== 'superseded') {
     finishRun(runId, {
       status: 'dropped',
       exit_code: run.exitCode,
@@ -534,6 +565,7 @@ async function executeJob(job: Job): Promise<void> {
     );
     return;
   }
+  const isLateReply = Boolean(liveChain?.supersededBy);
 
   const saved = postMessage({
     roomId: room.id,
@@ -549,6 +581,7 @@ async function executeJob(job: Job): Promise<void> {
       mode: job.mode,
       round: job.round ?? null,
       topic: job.topic ?? null,
+      ...(isLateReply ? { lateReply: true, supersededBy: liveChain?.supersededBy ?? null } : {}),
     },
     knownTags: new Set(prepared.members.map((m) => m.tag)),
   });
@@ -560,7 +593,8 @@ async function executeJob(job: Job): Promise<void> {
   }
   setAgentStatus(agent.tag, 'idle');
 
-  if (job.route !== false && job.mode !== 'discuss') {
+  // 让位后的迟到回复不再继续接力（避免把已经翻篇的话题重新点着）
+  if (job.route !== false && job.mode !== 'discuss' && !isLateReply) {
     routeMessage(saved);
   }
 }
@@ -621,11 +655,20 @@ export function routeMessage(row: MessageRow): number {
   if (row.sender_kind === 'human' && conf.interruptOnHumanMessage !== false) {
     const { stopped, dropped } = interruptRoomChains(row.room_id);
     if (stopped || dropped) {
-      systemMessage(
-        room.id,
-        `⏸ 收到新消息，已让上一条讨论链让位（停止 ${stopped} 条链${dropped ? `，丢弃 ${dropped} 个排队任务` : ''}）`,
-        { kind: 'chain.interrupt', level: 'info' },
-      );
+      // 注意：正在生成的那一条会照常发出来（标记「回复较早消息」），这里只说被跳过的排队任务，
+      // 没有排队任务时干脆不说话——以前每个新消息都刷一条"让位"提示，太吵。
+      for (const [, chain] of chains) {
+        if (chain.roomId === room.id && chain.stopped && chain.reason === 'superseded') {
+          chain.supersededBy = row.id;
+        }
+      }
+      if (dropped > 0) {
+        systemMessage(
+          room.id,
+          `⏭ 新消息优先，已跳过 ${dropped} 个排队中的任务（正在生成的回复仍会保留，稍后带「回复较早消息」标记发出）`,
+          { kind: 'chain.interrupt', level: 'info' },
+        );
+      }
     }
   }
 

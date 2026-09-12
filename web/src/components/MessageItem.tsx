@@ -114,6 +114,14 @@ export function MessageItem({ message, members, files, replyTo, onReply, onDelet
               接力 {message.hop}
             </span>
           )}
+          {Boolean(message.meta?.lateReply) && (
+            <span
+              className="rounded bg-amber-500/15 px-1 text-[10px] text-amber-700 dark:text-amber-400"
+              title="这条回复生成期间群里来了新消息，它是对更早那条消息的回应"
+            >
+              回复较早消息
+            </span>
+          )}
           <span>{formatTime(message.createdAt)}</span>
         </div>
 

@@ -1,4 +1,5 @@
 import {
+  deleteMessage,
   findRoom,
   getMessage,
   insertMessage,
@@ -6,6 +7,7 @@ import {
   newId,
   now,
   parseJson,
+  updateMessageText,
   type MemberRow,
   type MessageRow,
 } from './db.js';
@@ -96,6 +98,26 @@ export function systemMessage(roomId: string, text: string, meta: Record<string,
     type: 'system',
     meta,
   });
+}
+
+/**
+ * 原地更新一条系统消息（用于「长任务进度」这类心跳：同一条消息反复改写，而不是每 2 分钟刷一条新的）。
+ * 客户端收到同样 id 的 message 事件会按 id 覆盖（store 里就是按 id 合并的），所以无需新增事件类型。
+ */
+export function updateSystemMessage(id: number, text: string, meta?: Record<string, unknown>): MessageRow | null {
+  const updated = updateMessageText(id, text, meta);
+  if (!updated) return null;
+  broadcast({ type: 'message', roomId: updated.room_id, data: publicMessage(updated), ts: Date.now() });
+  return updated;
+}
+
+/** 删除一条系统消息并广播（心跳在任务结束时收尾用） */
+export function removeSystemMessage(id: number): void {
+  const row = getMessage(id);
+  if (!row) return;
+  if (deleteMessage(id)) {
+    broadcast({ type: 'message.deleted', roomId: row.room_id, data: { id }, ts: Date.now() });
+  }
 }
 
 export function newChainId(): string {

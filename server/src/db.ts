@@ -467,6 +467,23 @@ export function getMessage(id: number): MessageRow | undefined {
     | undefined;
 }
 
+/** 改写一条消息的正文（用于「长任务进度」这类同一条消息原地更新，避免刷屏） */
+export function updateMessageText(id: number, text: string, meta?: Record<string, unknown>): MessageRow | undefined {
+  const d = getDb();
+  if (meta) {
+    d.prepare('UPDATE messages SET text = ?, meta = ? WHERE id = ?').run(text, JSON.stringify(meta), id);
+  } else {
+    d.prepare('UPDATE messages SET text = ? WHERE id = ?').run(text, id);
+  }
+  return getMessage(id);
+}
+
+/** 删除一条消息（心跳收尾、撤回等场景） */
+export function deleteMessage(id: number): boolean {
+  const res = getDb().prepare('DELETE FROM messages WHERE id = ?').run(id);
+  return Number(res.changes) > 0;
+}
+
 export interface HistoryQuery {
   roomId: string;
   limit?: number;

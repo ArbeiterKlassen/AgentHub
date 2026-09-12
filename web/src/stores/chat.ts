@@ -219,6 +219,19 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         }));
         break;
       }
+      /* 消息被删除（心跳收尾、撤回等）：按 id 从列表里移除 */
+      case 'message.deleted': {
+        const data = event.data as { id: number };
+        const roomId = event.roomId ?? '';
+        if (!roomId || !data?.id) break;
+        set((s) => ({
+          messages: {
+            ...s.messages,
+            [roomId]: (s.messages[roomId] ?? []).filter((m) => m.id !== data.id),
+          },
+        }));
+        break;
+      }
       case 'typing': {
         const data = event.data as { tag: string; nickname: string; runId: string; state: 'start' | 'stop' };
         const roomId = event.roomId ?? '';
