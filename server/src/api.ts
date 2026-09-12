@@ -45,7 +45,7 @@ import {
 import { loadAdapters, probeAll } from './adapters.js';
 import { handleDownload, handleUpload, listRoomFiles, publicFile, removeFile } from './files.js';
 import { publicMessage, postMessage, roomMemberTagSet, systemMessage } from './messages.js';
-import { getAgentStatus, isOnline, runtimeSnapshot, subscribe, unsubscribe } from './hub.js';
+import { broadcast, getAgentStatus, isOnline, runtimeSnapshot, subscribe, unsubscribe } from './hub.js';
 import {
   DEFAULT_ROOM_META,
   isPaused,
@@ -355,6 +355,8 @@ export function buildApiRouter(): Router {
         if (target) addRoomMember(room.id, target.tag, 'member');
       }
       systemMessage(room.id, `房间「${room.name}」已创建，创建者 @${me.tag}`);
+      // 让被拉进新房间的成员客户端立刻看到它（否则要刷新页面才出现）
+      broadcast({ type: 'room.created', roomId: room.id, data: roomSummary(room, me.tag, req), ts: Date.now() });
       return { room: roomSummary(room, me.tag, req) };
     }),
   );
@@ -398,6 +400,13 @@ export function buildApiRouter(): Router {
       const already = isRoomMember(room.id, me.tag);
       if (!already) {
         addRoomMember(room.id, me.tag, 'member');
+        // 推送给房间里已有的客户端：成员列表要立刻能看到新成员（以前只能手动刷新）
+        broadcast({
+          type: 'member.join',
+          roomId: room.id,
+          data: { member: publicMember(me), via: 'invite-code' },
+          ts: Date.now(),
+        });
         systemMessage(room.id, `@${me.tag}（${me.nickname}）通过邀请码加入了房间`, {
           kind: 'member.join',
           tag: me.tag,
@@ -451,6 +460,7 @@ export function buildApiRouter(): Router {
       db.prepare('DELETE FROM messages WHERE room_id = ?').run(room.id);
       db.prepare('DELETE FROM files WHERE room_id = ?').run(room.id);
       db.prepare('DELETE FROM rooms WHERE id = ?').run(room.id);
+      broadcast({ type: 'room.deleted', roomId: room.id, data: { id: room.id }, ts: Date.now() });
       return { ok: true, removed: room.id };
     }),
   );
@@ -465,6 +475,12 @@ export function buildApiRouter(): Router {
       const target = findMember(tag);
       if (!target) throw new HttpError(404, `成员 @${tag} 不存在，请先注册/创建`);
       addRoomMember(room.id, tag);
+      broadcast({
+        type: 'member.join',
+        roomId: room.id,
+        data: { member: publicMember(target), via: 'manual' },
+        ts: Date.now(),
+      });
       systemMessage(room.id, `@${tag}（${target.nickname}）加入了房间`, { kind: 'member.join', tag });
       return { ok: true, members: listRoomMemberTags(room.id) };
     }),
@@ -478,6 +494,7 @@ export function buildApiRouter(): Router {
       const tag = assertTag(req.params.tag);
       if (tag !== me.tag && me.role !== 'admin') throw new HttpError(403, '只能移除自己或由管理员执行');
       removeRoomMember(room.id, tag);
+      broadcast({ type: 'member.leave', roomId: room.id, data: { tag }, ts: Date.now() });
       systemMessage(room.id, `@${tag} 离开了房间`, { kind: 'member.leave', tag });
       return { ok: true, members: listRoomMemberTags(room.id) };
     }),

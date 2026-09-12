@@ -272,6 +272,36 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         }));
         break;
       }
+      /* 成员变更：以前没人处理这些事件，所以"别人用邀请码进群后，成员列表要手动刷新才出现"。
+         现在收到就重新拉一次房间详情（成员 + 文件 + 房间摘要），顺手把房间列表里的成员数也更新掉。 */
+      case 'member.join':
+      case 'member.leave':
+      case 'room.update': {
+        const roomId = event.roomId ?? '';
+        if (!roomId) break;
+        void get()
+          .refreshRoom(roomId)
+          .catch((err) => log.warn('刷新房间失败', err));
+        break;
+      }
+      /* 新建房间：别人把你拉进新群时，直接出现在你的房间列表里 */
+      case 'room.created': {
+        const room = event.data as RoomSummary;
+        if (!room?.id) break;
+        set((s) => ({
+          rooms: s.rooms.some((r) => r.id === room.id) ? s.rooms.map((r) => (r.id === room.id ? room : r)) : [...s.rooms, room],
+        }));
+        log.info('有新房间', room.name);
+        break;
+      }
+      case 'room.deleted': {
+        const data = event.data as { id: string };
+        set((s) => ({
+          rooms: s.rooms.filter((r) => r.id !== data.id),
+          activeRoomId: s.activeRoomId === data.id ? null : s.activeRoomId,
+        }));
+        break;
+      }
       default:
         log.debug('未处理的实时事件', event.type);
     }
