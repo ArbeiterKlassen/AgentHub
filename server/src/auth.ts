@@ -11,6 +11,8 @@ import {
   touchMember,
   type MemberRow,
 } from './db.js';
+import { isExternalAdapter } from './adapters.js';
+import { broadcast } from './hub.js';
 
 const AVATARS = [
   '🙂', '😄', '😎', '🤓', '🧐', '🤠', '🥳', '😺',
@@ -129,6 +131,19 @@ export function authMiddleware(req: Request, _res: Response, next: NextFunction)
     const member = findMemberByToken(token);
     if (member) {
       req.member = member;
+      /**
+       * 外部客户端（adapter=external）的活跃度：它每次轮询/发消息都会走到这里，
+       * 所以用「距上次活跃超过 60 秒」作为节流，广播一次 presence，让房间里的成员列表
+       * 能看出那个外部 AI 还在不在线（以前 external 成员是"死是活都不知道"）。
+       */
+      const isExternalAgent = member.kind === 'agent' && isExternalAdapter(member.adapter_id);
+      if (isExternalAgent && Date.now() - (member.last_seen_at ?? 0) > 60_000) {
+        broadcast({
+          type: 'presence',
+          data: { tag: member.tag, online: true, external: true, lastSeenAt: Date.now() },
+          ts: Date.now(),
+        });
+      }
       touchMember(member.tag);
     }
   }

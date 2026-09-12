@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Hash, KeyRound, Loader2, Menu, Pause, Play, Plus, StopCircle, Upload, Users } from 'lucide-react';
+import { Hash, KeyRound, Loader2, Menu, Pause, Play, Plus, Search, StopCircle, Upload, Users } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 import { useChatStore } from '@/stores/chat';
 import { useSessionStore } from '@/stores/session';
@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { NewRoomDialog } from '@/components/dialogs/NewRoomDialog';
 import { AddMemberDialog } from '@/components/dialogs/AddMemberDialog';
 import { JoinRoomDialog } from '@/components/dialogs/JoinRoomDialog';
+import { SearchDialog } from '@/components/dialogs/SearchDialog';
 import { cn } from '@/lib/utils';
 import { log } from '@/lib/logger';
 import type { ChatMessage } from '@/lib/types';
@@ -27,11 +28,13 @@ export function ChatPage() {
     members,
     files,
     typing,
+    focusMessageId,
     loadRooms,
     openRoom,
     removeMessage,
     upload,
     control,
+    clearFocus,
   } = useChatStore();
   const token = useSessionStore((s) => s.token);
   const { rightPanelOpen, pushToast } = useUiStore();
@@ -39,6 +42,7 @@ export function ChatPage() {
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [newRoomOpen, setNewRoomOpen] = useState(false);
   const [joinRoomOpen, setJoinRoomOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   // 手机端：房间列表 / 成员面板都做成抽屉，桌面端仍然常驻
   const [roomDrawerOpen, setRoomDrawerOpen] = useState(false);
@@ -138,6 +142,9 @@ export function ChatPage() {
               <Button variant="ghost" size="icon" onClick={() => setPanelDrawerOpen(true)} title="成员 / 文件 / AI">
                 <Users className="h-5 w-5" />
               </Button>
+              <Button variant="ghost" size="icon" onClick={() => setSearchOpen(true)} title="搜索消息 / 导出记录">
+                <Search className="h-5 w-5" />
+              </Button>
             </div>
 
             <div className="hidden h-14 shrink-0 items-center gap-3 border-b px-4 md:flex">
@@ -171,6 +178,14 @@ export function ChatPage() {
                     <span className="ml-1 text-[11px] text-muted-foreground">+{roomMembers.length - 5}</span>
                   )}
                 </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  title="搜索消息 / 导出聊天记录"
+                  onClick={() => setSearchOpen(true)}
+                >
+                  <Search className="h-3.5 w-3.5" />
+                </Button>
                 <Button variant="outline" size="sm" onClick={() => setAddMemberOpen(true)}>
                   <Users className="mr-1 h-3.5 w-3.5" />
                   拉人/拉 AI
@@ -215,6 +230,8 @@ export function ChatPage() {
               members={roomMembers}
               files={roomFiles}
               typing={roomTyping}
+              focusMessageId={focusMessageId}
+              onFocusHandled={clearFocus}
               onReply={(message) => setReplyTo(message)}
               onDelete={(message) => void onDelete(message)}
             />
@@ -227,6 +244,7 @@ export function ChatPage() {
             />
 
             <AddMemberDialog open={addMemberOpen} onOpenChange={setAddMemberOpen} roomId={activeRoomId} />
+            <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} roomId={activeRoomId} />
           </>
         )}
 

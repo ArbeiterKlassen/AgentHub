@@ -14,15 +14,30 @@ interface MessageListProps {
   members: Member[];
   files: SharedFile[];
   typing: Array<{ tag: string; nickname: string }>;
+  /** 搜索里点了「定位」的消息 id：滚过去并短暂高亮 */
+  focusMessageId?: number | null;
+  onFocusHandled?: () => void;
   onReply: (message: ChatMessage) => void;
   onDelete: (message: ChatMessage) => void;
 }
 
-export function MessageList({ roomId, messages, members, files, typing, onReply, onDelete }: MessageListProps) {
+export function MessageList({
+  roomId,
+  messages,
+  members,
+  files,
+  typing,
+  focusMessageId,
+  onFocusHandled,
+  onReply,
+  onDelete,
+}: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [earlier, setEarlier] = useState<ChatMessage[]>([]);
+  const [flashId, setFlashId] = useState<number | null>(null);
+  const handledFocus = useRef<number | null>(null);
 
   const all = useMemo(() => {
     const map = new Map<number, ChatMessage>();
@@ -47,6 +62,21 @@ export function MessageList({ roomId, messages, members, files, typing, onReply,
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [roomId]);
+
+  /* 搜索定位：等这条消息渲染出来再滚动（jumpToMessage 会先把上下文并进列表） */
+  useEffect(() => {
+    if (!focusMessageId || handledFocus.current === focusMessageId) return;
+    const el = scrollRef.current?.querySelector<HTMLElement>(`[data-message-id="${focusMessageId}"]`);
+    if (!el) return;
+    handledFocus.current = focusMessageId;
+    setAtBottom(false);
+    el.scrollIntoView({ block: 'center' });
+    setFlashId(focusMessageId);
+    onFocusHandled?.();
+    const timer = window.setTimeout(() => setFlashId(null), 2600);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusMessageId, all.length]);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -108,7 +138,14 @@ export function MessageList({ roomId, messages, members, files, typing, onReply,
           const showDay = day !== lastDay;
           lastDay = day;
           return (
-            <div key={message.id}>
+            <div
+              key={message.id}
+              data-message-id={message.id}
+              className={cn(
+                'rounded-lg transition-colors',
+                flashId === message.id && 'bg-primary/10 ring-1 ring-primary/40',
+              )}
+            >
               {showDay && (
                 <div className="my-3 flex justify-center">
                   <span className="rounded-full bg-muted px-2.5 py-0.5 text-[11px] text-muted-foreground">{day}</span>

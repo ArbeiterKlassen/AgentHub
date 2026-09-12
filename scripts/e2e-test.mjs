@@ -6,7 +6,7 @@
  *
  * 覆盖：健康检查 / 注册登录 / 建房加人 / 消息与 @唤醒 / AI 互相接力与跳数上限 /
  *       停止后不再有迟到回帖 / 共享文件上传下载 / ah CLI 拉取聊天记录 /
- *       暂停恢复 / 多 AI 讨论模式。
+ *       暂停恢复 / 多 AI 讨论模式 / 邀请码 / 外部客户端在线状态 / @全体 反馈 / 聊天记录导出。
  */
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -415,6 +415,69 @@ async function run() {
     rotated.ok && rotated.data.code !== roomCode && oldCodeGone.status === 404,
     `${roomCode} → ${rotated.data.code}`,
   );
+
+  /* 14. 外部客户端（adapter=external）的在线状态：没有长连接，按「最近有没有带 token 活动」判定 */
+  const extTag = `ext-${suffix}`;
+  await register(extTag, '外部 AI', { kind: 'agent', adapterId: 'external' });
+  await api(`/api/rooms/${ROOM}/members`, { method: 'POST', token: tokens[alice], body: { tag: extTag } });
+  const roomBefore = await api(`/api/rooms/${ROOM}`, { token: tokens[alice] });
+  const extBefore = roomBefore.data.members?.find((m) => m.tag === extTag);
+  check(
+    '外部客户端成员被标记 external，且从没活跃过时显示离线',
+    extBefore?.external === true && extBefore?.online === false,
+  );
+
+  await api('/api/me', { token: tokens[extTag] });
+  const roomAfter = await api(`/api/rooms/${ROOM}`, { token: tokens[alice] });
+  const extAfter = roomAfter.data.members?.find((m) => m.tag === extTag);
+  check(
+    '外部客户端拉过一次消息后显示在线（带 lastSeenAt）',
+    extAfter?.online === true && Boolean(extAfter?.lastSeenAt),
+  );
+
+  /* 15. @全体 的可见反馈：说清入队了几个、哪些外部客户端要自己拉 */
+  await api(`/api/rooms/${ROOM}/messages`, {
+    method: 'POST',
+    token: tokens[alice],
+    body: { text: '@全体 汇报一下现在的状态' },
+  });
+  const noticeMsgs = await fetchMessages(40);
+  const broadcastNotice = noticeMsgs.find(
+    (m) => m.type === 'system' && m.text.includes('@全体') && m.text.includes('外部客户端'),
+  );
+  check(
+    '@全体 会给出「通知了谁」的系统反馈（含外部客户端要自己拉）',
+    Boolean(broadcastNotice) && /已通知 \d+ 个/.test(broadcastNotice.text),
+    broadcastNotice?.text ?? '(没有找到反馈消息)',
+  );
+
+  /* 16. 聊天记录导出 */
+  const exportMd = await api(`/api/rooms/${ROOM}/export?format=md&token=${encodeURIComponent(tokens[alice])}`);
+  const mdText = String(exportMd.data.raw ?? '');
+  check(
+    '导出 Markdown：带房名与正文',
+    exportMd.status === 200 && mdText.startsWith(`# ${ROOM}`) && mdText.includes('汇报一下现在的状态'),
+    `${mdText.length} 字符`,
+  );
+
+  const exportJson = await api(`/api/rooms/${ROOM}/export?format=json&token=${encodeURIComponent(tokens[alice])}`);
+  const jsonCount = exportJson.data?.count;
+  check(
+    '导出 JSON：可解析且条数吻合',
+    exportJson.status === 200 && Number.isFinite(jsonCount) && jsonCount > 0,
+    `count=${jsonCount}`,
+  );
+
+  const exportFiltered = await api(
+    `/api/rooms/${ROOM}/export?format=md&search=${encodeURIComponent('汇报一下')}&token=${encodeURIComponent(tokens[alice])}`,
+  );
+  check('导出支持按关键词过滤', String(exportFiltered.data.raw ?? '').includes('汇报一下现在的状态'));
+
+  const exportBad = await api(`/api/rooms/${ROOM}/export?format=csv&token=${encodeURIComponent(tokens[alice])}`);
+  check('导出格式非法返回 400', exportBad.status === 400);
+
+  const exportAnon = await api(`/api/rooms/${ROOM}/export?format=md`);
+  check('未登录不能导出聊天记录（401）', exportAnon.status === 401);
 }
 
 function runCli(args, env) {

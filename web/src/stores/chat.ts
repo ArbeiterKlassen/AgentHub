@@ -21,6 +21,8 @@ interface ChatState {
   loadingRooms: boolean;
   loadingRoom: boolean;
   error: string | null;
+  /** 搜索里点「定位」后要高亮的那条消息 */
+  focusMessageId: number | null;
 
   loadRooms: () => Promise<RoomSummary[]>;
   openRoom: (roomId: string) => Promise<void>;
@@ -28,6 +30,9 @@ interface ChatState {
   joinRoomByCode: (code: string) => Promise<{ room: RoomSummary; alreadyMember: boolean }>;
   refreshRoom: (roomId: string) => Promise<void>;
   send: (text: string, files?: string[], replyTo?: number | null) => Promise<void>;
+  searchMessages: (roomId: string, query: string, limit?: number) => Promise<ChatMessage[]>;
+  jumpToMessage: (roomId: string, messageId: number) => Promise<void>;
+  clearFocus: () => void;
   upload: (file: File) => Promise<void>;
   removeMessage: (id: number) => Promise<void>;
   removeFile: (id: string) => Promise<void>;
@@ -58,6 +63,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   loadingRooms: false,
   loadingRoom: false,
   error: null,
+  focusMessageId: null,
 
   loadRooms: async () => {
     set({ loadingRooms: true, error: null });
@@ -138,6 +144,29 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       messages: { ...state.messages, [roomId]: mergeMessages(state.messages[roomId] ?? [], [res.message]) },
     }));
   },
+
+  /** 服务端全文检索：能搜到本地还没加载的更早消息 */
+  searchMessages: async (roomId, query, limit = 50) => {
+    const trimmed = query.trim();
+    if (!trimmed) return [];
+    const res = await apiClient.messages(roomId, { search: trimmed, limit });
+    log.debug('搜索消息', { roomId, query: trimmed, hits: res.messages.length });
+    return res.messages;
+  },
+
+  /**
+   * 定位到某条历史消息：先把这条消息前后的一段上下文并进当前视图，
+   * 再交给 MessageList 滚动 + 高亮（只加载这一段，不把整段历史拉下来）。
+   */
+  jumpToMessage: async (roomId, messageId) => {
+    const res = await apiClient.messages(roomId, { before: messageId + 1, limit: 60 });
+    set((state) => ({
+      messages: { ...state.messages, [roomId]: mergeMessages(state.messages[roomId] ?? [], res.messages) },
+      focusMessageId: messageId,
+    }));
+  },
+
+  clearFocus: () => set({ focusMessageId: null }),
 
   removeMessage: async (id) => {
     const roomId = get().activeRoomId;
@@ -259,12 +288,25 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         });
         break;
       }
+      /**
+       * 在线状态：长连接的成员走连接数，外部客户端（external）没有长连接，
+       * 由服务端按「最近有没有带 token 来拉消息」广播 presence，这里照样更新即可。
+       */
       case 'presence': {
-        const data = event.data as { tag: string; online: boolean };
+        const data = event.data as { tag: string; online: boolean; external?: boolean; lastSeenAt?: number };
         set((s) => {
           const next: Record<string, Member[]> = {};
           for (const [roomId, list] of Object.entries(s.members)) {
-            next[roomId] = list.map((m) => (m.tag === data.tag ? { ...m, online: data.online } : m));
+            next[roomId] = list.map((m) =>
+              m.tag === data.tag
+                ? {
+                    ...m,
+                    online: data.online,
+                    external: data.external ?? m.external,
+                    lastSeenAt: data.lastSeenAt ?? m.lastSeenAt,
+                  }
+                : m,
+            );
           }
           return { members: { ...s.members, ...next } };
         });
@@ -329,6 +371,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       files: {},
       typing: {},
       error: null,
+      focusMessageId: null,
     }),
 }));
 

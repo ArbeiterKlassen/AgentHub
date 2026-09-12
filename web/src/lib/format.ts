@@ -32,6 +32,15 @@ export function formatDuration(ms: number | null | undefined): string {
   return `${Math.floor(ms / 60000)}m${Math.round((ms % 60000) / 1000)}s`;
 }
 
+/** 「3 分钟前」这种相对时间，用来显示外部客户端最后一次活跃 */
+export function formatRelative(ts: number, base = Date.now()): string {
+  const diff = Math.max(base - ts, 0);
+  if (diff < 60_000) return '刚刚';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+  return `${Math.floor(diff / 86_400_000)} 天前`;
+}
+
 /** @全体 的几种写法（与后端 ALL_MENTION_RE 保持同一口径） */
 export const ALL_MENTION_ALIASES = ['all', 'everyone', '全体成员', '全体', '所有人', '全员'] as const;
 

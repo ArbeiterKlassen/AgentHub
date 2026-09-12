@@ -18,7 +18,7 @@ import {
   type MessageRow,
   type RoomRow,
 } from './db.js';
-import { getAdapter, type AdapterPreset } from './adapters.js';
+import { getAdapter, isExternalAdapter, type AdapterPreset } from './adapters.js';
 import { runAdapter } from './agentRunner.js';
 import {
   buildAgentPrompt,
@@ -91,6 +91,18 @@ export const DEFAULT_ROOM_META = {
   /** 后续心跳间隔 */
   progressRepeatMs: ROOM_DEFAULTS.progressRepeatMs,
 };
+
+/** 外部客户端超过这么久没动静，@ 它时会在群里提醒一句「它可能收不到」 */
+const EXTERNAL_STALE_MS = 10 * 60 * 1000;
+
+function humanAgo(ms: number): string {
+  const min = Math.floor(ms / 60000);
+  if (min < 1) return '刚刚';
+  if (min < 60) return `${min} 分钟前`;
+  const hour = Math.floor(min / 60);
+  if (hour < 24) return `${hour} 小时前`;
+  return `${Math.floor(hour / 24)} 天前`;
+}
 
 /** 停止一条讨论链时，把它还没执行的排队任务一起丢掉 */
 function dropChainJobs(chainId: string): number {
@@ -677,7 +689,32 @@ export function routeMessage(row: MessageRow): number {
       否则会出现「服务端生成的回复」和「外部 AI 的回复」以同一个 tag 同时出现在群里 */
   const isExternal = (tag: string): boolean => {
     const agent = agentByTag.get(tag);
-    return Boolean(agent) && getAdapter(agent!.adapter_id ?? '')?.kind === 'external';
+    return Boolean(agent) && isExternalAdapter(agent!.adapter_id);
+  };
+  /** 外部成员最近活跃过吗？（没有 last_seen_at = 从注册后一直没动过） */
+  const externalIdleMs = (tag: string): number | null => {
+    const seen = agentByTag.get(tag)?.last_seen_at ?? null;
+    return seen ? Date.now() - seen : null;
+  };
+  /**
+   * @全体 之后要有可见反馈：以前点完 @全体，除了一堆 AI 陆续回话没有任何说明；
+   * 更糟的是 external 成员压根不进服务端队列（它们自己轮询取消息），用户会以为漏通知了。
+   */
+  const mentionAllNotice = (queued: number, truncated: number): void => {
+    if (!mentionAll) return;
+    const externalTags = agents
+      .filter((a) => a.tag !== row.sender_tag && isExternal(a.tag))
+      .map((a) => a.tag);
+    const parts: string[] = [
+      queued > 0 ? `📣 @全体：已通知 ${queued} 个由服务端自动应答的 AI` : '📣 @全体：本次没有可自动应答的 AI 入队',
+    ];
+    if (truncated > 0) parts.push(`，另有 ${truncated} 个因本轮剩余额度不足未入队`);
+    if (externalTags.length) {
+      parts.push(
+        `；${externalTags.length} 个外部客户端（${externalTags.map((t) => `@${t}`).join('、')}）不在服务端排队，靠它们自己拉取消息后回复`,
+      );
+    }
+    systemMessage(room.id, parts.join(''), { kind: 'chain.broadcast', level: queued ? 'info' : 'warn' });
   };
   for (const tag of mentions) {
     if (tag !== row.sender_tag && agentByTag.has(tag) && !isExternal(tag)) targets.add(tag);
@@ -696,7 +733,31 @@ export function routeMessage(row: MessageRow): number {
       if (agent.trigger_mode === 'all' && !isExternal(agent.tag)) targets.add(agent.tag);
     }
   }
-  if (!targets.size) return 0;
+
+  /* 被点名的外部客户端如果早就没动静了，提醒一句——不然人会一直等一个根本没挂着的 AI */
+  const staleExternal = mentions.filter((tag) => {
+    if (tag === row.sender_tag || !agentByTag.has(tag) || !isExternal(tag)) return false;
+    const idle = externalIdleMs(tag);
+    return idle === null || idle > EXTERNAL_STALE_MS;
+  });
+  if (staleExternal.length) {
+    const detail = staleExternal
+      .map((tag) => {
+        const idle = externalIdleMs(tag);
+        return `@${tag}（${idle === null ? '从未活跃' : `最近活跃于 ${humanAgo(idle)}`}）`;
+      })
+      .join('、');
+    systemMessage(room.id, `⚠️ ${detail} 是外部客户端，现在可能没挂着，回复未必会来`, {
+      kind: 'presence.stale',
+      level: 'warn',
+      tags: staleExternal,
+    });
+  }
+
+  if (!targets.size) {
+    mentionAllNotice(0, 0);
+    return 0;
+  }
 
   const chainId = row.chain_id ?? newChainId();
   const chain = chainFor(chainId, room.id);
@@ -713,15 +774,12 @@ export function routeMessage(row: MessageRow): number {
     return 0;
   }
   const remaining = chain.budget - chain.turns;
+  let truncated = 0;
   if (targets.size > remaining) {
     if (mentionAll && remaining > 0) {
-      // 群发不因额度不足整条链停摆：按房间成员顺序截断，并说明截断了几个人
+      // 群发不因额度不足整条链停摆：按房间成员顺序截断，截断人数在下面的 @全体 反馈里说明
       const kept = [...targets].slice(0, remaining);
-      systemMessage(
-        room.id,
-        `ℹ️ 本轮发言上限 ${chain.budget} 条、剩余 ${remaining} 条，@全体 只入队 ${kept.length}/${targets.size} 个 AI`,
-        { kind: 'chain.broadcast', level: 'warn' },
-      );
+      truncated = targets.size - kept.length;
       targets.clear();
       for (const tag of kept) targets.add(tag);
     } else {
@@ -746,6 +804,7 @@ export function routeMessage(row: MessageRow): number {
     });
     queued += 1;
   }
+  mentionAllNotice(queued, truncated);
   return queued;
 }
 

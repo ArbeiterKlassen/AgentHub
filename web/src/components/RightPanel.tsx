@@ -25,9 +25,9 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AgentLogsDialog } from '@/components/dialogs/AgentLogsDialog';
-import { apiClient, downloadUrl } from '@/lib/api';
+import { apiClient, downloadRoomExport, downloadUrl } from '@/lib/api';
 import { isImageFile } from '@/lib/fileKind';
-import { formatDateTime, formatSize } from '@/lib/format';
+import { formatDateTime, formatRelative, formatSize } from '@/lib/format';
 import { cn, copyText } from '@/lib/utils';
 import { log } from '@/lib/logger';
 import { useState } from 'react';
@@ -163,6 +163,41 @@ const { members, files, loadingRoom, typing } = useChatStore();
                   >
                     复制邀请信息（含码 + 地址 + 步骤）
                   </button>
+                </div>
+              )}
+
+              {room && (
+                <div className="rounded-lg border bg-card p-2.5">
+                  <div className="text-[11px] text-muted-foreground">导出聊天记录</div>
+                  <div className="mt-1 flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 flex-1 px-2 text-xs"
+                      title="导出为 Markdown（最多 5000 条）"
+                      onClick={() => {
+                        downloadRoomExport(server, room.id, room.name, 'md', { limit: 5000 });
+                        pushToast('已开始导出 Markdown', 'success');
+                      }}
+                    >
+                      <Download className="mr-1 h-3 w-3" />
+                      Markdown
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 flex-1 px-2 text-xs"
+                      title="导出为 JSON（含 meta，便于脚本处理）"
+                      onClick={() => {
+                        downloadRoomExport(server, room.id, room.name, 'json', { limit: 5000 });
+                        pushToast('已开始导出 JSON', 'success');
+                      }}
+                    >
+                      <Download className="mr-1 h-3 w-3" />
+                      JSON
+                    </Button>
+                  </div>
+                  <p className="mt-1 text-[10px] text-muted-foreground">想按关键词搜/只导出一部分，用标题栏的搜索</p>
                 </div>
               )}
               {onAddMember && (
@@ -352,6 +387,18 @@ function AgentCard({
   onLogs: () => void;
 }) {
   const status = thinking ? 'thinking' : (agent.status ?? 'offline');
+  /**
+   * 外部客户端（adapter=external）由它自己轮询取消息，服务端不代跑，所以既没有
+   * WebSocket 连接也不会有运行记录——旧版这里永远显示「离线」。现在按最近活跃时间显示。
+   */
+  const externalLabel = !agent.external
+    ? null
+    : agent.online
+      ? '在线（外部）'
+      : agent.lastSeenAt
+        ? `${formatRelative(agent.lastSeenAt)}活跃`
+        : '未连接';
+  const showExternal = Boolean(agent.external);
   return (
     <div className="rounded-lg border bg-card p-2.5">
       <div className="flex items-center gap-2">
@@ -359,21 +406,33 @@ function AgentCard({
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{agent.nickname}</div>
           <div className="truncate text-[11px] text-muted-foreground">
-            @{agent.tag} · {agent.adapterId ?? 'AI'}
+            @{agent.tag} · {showExternal ? '外部客户端' : (agent.adapterId ?? 'AI')}
           </div>
         </div>
-        <span
-          className={cn(
-            'rounded-full px-2 py-0.5 text-[10px]',
-            status === 'thinking' && 'bg-primary/15 text-primary',
-            status === 'idle' && 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400',
-            status === 'error' && 'bg-destructive/15 text-destructive',
-            status === 'offline' && 'bg-muted text-muted-foreground',
-          )}
-        >
-          {STATUS_LABEL[status] ?? status}
-          {agent.queue ? ` · 排队 ${agent.queue}` : ''}
-        </span>
+        {showExternal ? (
+          <span
+            className={cn(
+              'shrink-0 rounded-full px-2 py-0.5 text-[10px]',
+              agent.online ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400' : 'bg-muted text-muted-foreground',
+            )}
+            title={agent.lastSeenAt ? `最后活跃：${formatDateTime(agent.lastSeenAt)}` : '这个 AI 客户端还没用它的 token 连过服务端'}
+          >
+            {externalLabel}
+          </span>
+        ) : (
+          <span
+            className={cn(
+              'shrink-0 rounded-full px-2 py-0.5 text-[10px]',
+              status === 'thinking' && 'bg-primary/15 text-primary',
+              status === 'idle' && 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400',
+              status === 'error' && 'bg-destructive/15 text-destructive',
+              status === 'offline' && 'bg-muted text-muted-foreground',
+            )}
+          >
+            {STATUS_LABEL[status] ?? status}
+            {agent.queue ? ` · 排队 ${agent.queue}` : ''}
+          </span>
+        )}
       </div>
       {agent.statusDetail && agent.status === 'error' && (
         <p className="mt-1.5 text-[11px] text-destructive">{agent.statusDetail}</p>

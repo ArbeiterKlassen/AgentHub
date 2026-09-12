@@ -214,3 +214,35 @@ export function downloadUrl(server: string, fileId: string, token: string, downl
   const query = new URLSearchParams({ token, ...(download ? { download: '1' } : {}) });
   return `${base}/api/files/${fileId}?${query}`;
 }
+
+/** 导出聊天记录的直链（带 token，点一下就能下载成 .md / .json） */
+export function exportUrl(
+  server: string,
+  roomId: string,
+  format: 'md' | 'json',
+  opts: { limit?: number; search?: string; sender?: string; includeSystem?: boolean } = {},
+): string {
+  const base = resolveServer(server);
+  const query = new URLSearchParams({ format, token: config.token });
+  if (opts.limit) query.set('limit', String(opts.limit));
+  if (opts.search) query.set('search', opts.search);
+  if (opts.sender) query.set('sender', opts.sender);
+  if (opts.includeSystem === false) query.set('system', '0');
+  return `${base}/api/rooms/${encodeURIComponent(roomId)}/export?${query}`;
+}
+
+/** 直接用 <a download> 触发下载（走 GET + query token，不占内存拼字符串） */
+export function downloadRoomExport(
+  server: string,
+  roomId: string,
+  roomName: string,
+  format: 'md' | 'json',
+  opts: { limit?: number; search?: string } = {},
+): void {
+  const a = document.createElement('a');
+  a.href = exportUrl(server, roomId, format, opts);
+  a.download = `AgentHub-${roomName}.${format}`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}

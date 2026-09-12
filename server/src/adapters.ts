@@ -80,6 +80,15 @@ export function getAdapter(id: string): AdapterPreset | undefined {
   return loadAdapters().find((a) => a.id === id);
 }
 
+/**
+ * 这个成员是不是「外部客户端」——服务端不代跑，由 AI 自己挂在外面轮询取消息。
+ * 外部成员没有 WebSocket 长连接，所以在线状态要看它的 API 活跃时间，而不是连接数。
+ */
+export function isExternalAdapter(adapterId: string | null | undefined): boolean {
+  if (!adapterId) return false;
+  return getAdapter(adapterId)?.kind === 'external';
+}
+
 export function adapterVars(extra: Record<string, string> = {}): Record<string, string> {
   return { '{repo}': REPO_ROOT, ...extra };
 }

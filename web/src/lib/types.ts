@@ -14,6 +14,8 @@ export interface Member {
   systemPrompt: string | null;
   createdAt?: number;
   lastSeenAt?: number | null;
+  /** 外部客户端（adapter=external）：服务端不代跑，靠它自己轮询取消息 */
+  external?: boolean;
   online?: boolean;
   status?: AgentStatus;
   statusDetail?: string | null;

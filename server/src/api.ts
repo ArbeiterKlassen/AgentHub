@@ -31,6 +31,7 @@ import {
   updateMember,
   updateRoom,
   type MemberRow,
+  type MessageRow,
   type RoomRow,
 } from './db.js';
 import {
@@ -42,7 +43,7 @@ import {
   requireAdmin,
   assertTag,
 } from './auth.js';
-import { loadAdapters, probeAll } from './adapters.js';
+import { isExternalAdapter, loadAdapters, probeAll } from './adapters.js';
 import { handleDownload, handleUpload, listRoomFiles, publicFile, removeFile } from './files.js';
 import { publicMessage, postMessage, roomMemberTagSet, systemMessage } from './messages.js';
 import { broadcast, getAgentStatus, isOnline, runtimeSnapshot, subscribe, unsubscribe } from './hub.js';
@@ -70,6 +71,88 @@ function clientIp(req: Request): string {
   const xff = req.headers['x-forwarded-for'];
   if (typeof xff === 'string' && xff.trim()) return xff.split(',')[0].trim();
   return req.ip ?? req.socket.remoteAddress ?? 'unknown';
+}
+
+/**
+ * 外部客户端（adapter=external）没有 WebSocket 长连接，光看连接数永远是「离线」。
+ * 它的客户端每次拉消息/发言都会带 token 走 authMiddleware 刷新 last_seen_at，
+ * 所以这里用「最近 3 分钟有没有动过」当作在线判定。
+ */
+export const EXTERNAL_ONLINE_WINDOW_MS = 3 * 60 * 1000;
+
+function memberOnline(member: MemberRow): boolean {
+  if (isExternalAdapter(member.adapter_id)) {
+    return Date.now() - (member.last_seen_at ?? 0) < EXTERNAL_ONLINE_WINDOW_MS;
+  }
+  return isOnline(member.tag);
+}
+
+/**
+ * 导出时要把「整段历史」捞出来，而 listMessages 一次最多 500 条，
+ * 所以按 id 游标翻页（after 是正序取最老的 N 条，正好当游标用）。
+ */
+function collectRoomMessages(
+  roomId: string,
+  opts: { limit: number; search?: string; sender?: string; includeSystem: boolean },
+): MessageRow[] {
+  const out: MessageRow[] = [];
+  let cursor = 0;
+  for (let round = 0; round < 200 && out.length < opts.limit; round += 1) {
+    const pageSize = Math.min(500, opts.limit - out.length);
+    const page = listMessages({
+      roomId,
+      after: cursor || undefined,
+      limit: pageSize,
+      search: opts.search,
+      sender: opts.sender,
+    });
+    if (!page.length) break;
+    for (const row of page) {
+      cursor = row.id;
+      if (!opts.includeSystem && (row.type === 'system' || row.sender_kind === 'system')) continue;
+      out.push(row);
+    }
+    if (page.length < pageSize) break;
+  }
+  return out;
+}
+
+function sendDownload(res: Response, filename: string, contentType: string, body: string): void {
+  const ascii = filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+  res.setHeader('Content-Type', contentType);
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+  );
+  res.send(body);
+}
+
+function roomMessagesToMarkdown(room: RoomRow, rows: MessageRow[], viewerTag: string): string {
+  const at = (ms: number): string => new Date(ms).toLocaleString('zh-CN', { hour12: false });
+  const lines: string[] = [];
+  lines.push(`# ${room.name}`);
+  if (room.topic) lines.push('', `> ${room.topic}`);
+  lines.push('', `- 群聊识别码：\`${room.code}\``);
+  lines.push(`- 导出者：@${viewerTag}`);
+  lines.push(`- 导出时间：${at(Date.now())}`);
+  lines.push(`- 消息条数：${rows.length}`);
+  lines.push('', '---', '');
+  for (const row of rows) {
+    const who =
+      row.sender_kind === 'system' || row.type === 'system'
+        ? '系统'
+        : `@${row.sender_tag}（${row.sender_nickname}）`;
+    lines.push(`**[${at(row.created_at)}] ${who}**`);
+    if (row.reply_to) lines.push(`> ↪ 回复 #${row.reply_to}`);
+    const body = String(row.text ?? '').replace(/\r\n/g, '\n').trimEnd();
+    if (body) {
+      for (const line of body.split('\n')) lines.push(line.startsWith('>') ? `>${line}` : line);
+    }
+    const files = parseJson<string[]>(row.files, []);
+    if (files.length) lines.push(`（附件 ${files.length} 个：${files.join('、')}）`);
+    lines.push('');
+  }
+  return `${lines.join('\n')}\n`;
 }
 
 type Handler = (req: Request, res: Response) => unknown | Promise<unknown>;
@@ -405,7 +488,8 @@ export function buildApiRouter(): Router {
           .filter((m): m is MemberRow => Boolean(m))
           .map((m) => ({
             ...publicMember(m),
-            online: isOnline(m.tag),
+            online: memberOnline(m),
+            external: isExternalAdapter(m.adapter_id),
             status: getAgentStatus(m.tag).status,
             statusDetail: getAgentStatus(m.tag).detail ?? null,
           })),
@@ -554,6 +638,48 @@ export function buildApiRouter(): Router {
     }),
   );
 
+  /**
+   * 导出聊天记录：GET /api/rooms/:room/export?format=md|json&limit=&search=&sender=&system=0
+   * 直接返回可下载的正文（带 Content-Disposition），所以浏览器里点链接就能存成文件。
+   */
+  api.get(
+    '/rooms/:room/export',
+    wrap((req, res) => {
+      const room = resolveRoom(req.params.room);
+      const me = requireRoomMember(req, room.id);
+      const format = String(req.query.format ?? 'md').toLowerCase();
+      if (format !== 'md' && format !== 'json') throw new HttpError(400, 'format 只能是 md 或 json');
+      const search =
+        typeof req.query.search === 'string' && req.query.search.trim() ? req.query.search.trim() : undefined;
+      const sender =
+        typeof req.query.sender === 'string' && req.query.sender.trim()
+          ? req.query.sender.trim().toLowerCase()
+          : undefined;
+      const includeSystem = req.query.system !== '0';
+      const limit = Math.min(Math.max(Number(req.query.limit ?? 2000) || 2000, 1), 20000);
+      const rows = collectRoomMessages(room.id, { limit, search, sender, includeSystem });
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+      const baseName = `AgentHub-${room.name}-${stamp}`;
+      if (format === 'json') {
+        const payload = {
+          room: { id: room.id, name: room.name, topic: room.topic, code: room.code },
+          exportedAt: Date.now(),
+          exportedBy: me.tag,
+          count: rows.length,
+          messages: rows.map(publicMessage),
+        };
+        sendDownload(res, `${baseName}.json`, 'application/json; charset=utf-8', `${JSON.stringify(payload, null, 2)}\n`);
+        return;
+      }
+      sendDownload(
+        res,
+        `${baseName}.md`,
+        'text/markdown; charset=utf-8',
+        roomMessagesToMarkdown(room, rows, me.tag),
+      );
+    }),
+  );
+
   api.post(
     '/rooms/:room/messages',
     wrap(async (req, res) => {
@@ -634,7 +760,8 @@ export function buildApiRouter(): Router {
         .filter((m): m is MemberRow => Boolean(m) && m!.kind === 'agent')
         .map((m) => ({
           ...publicMember(m),
-          online: isOnline(m.tag),
+          online: memberOnline(m),
+          external: isExternalAdapter(m.adapter_id),
           ...getAgentStatus(m.tag),
           runs: listRuns(m.tag, 5).map(publicRun),
         }));
