@@ -89,4 +89,10 @@ export const ROOM_DEFAULTS = {
   progressRepeatMs: Number(process.env.AH_PROGRESS_REPEAT_MS ?? 5 * 60 * 1000),
   /** 更新「思考中」状态里的已用时长（默认 15 秒，只在 UI 上体现，不进聊天记录） */
   statusTickMs: Number(process.env.AH_STATUS_TICK_MS ?? 15 * 1000),
+  /** 每次调用 AI 时拉多少条历史消息（再从中截取进提示词的那部分） */
+  historyMessages: Number(process.env.AH_HISTORY_MESSAGES ?? 30),
+  /** 进提示词的最近消息条数 */
+  contextLines: Number(process.env.AH_CONTEXT_LINES ?? 24),
+  /** 进提示词的历史正文字符预算（超出就从最旧的开始丢） */
+  contextMaxChars: Number(process.env.AH_CONTEXT_MAX_CHARS ?? 6000),
 };

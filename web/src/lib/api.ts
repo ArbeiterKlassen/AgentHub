@@ -185,7 +185,15 @@ export const apiClient = {
       },
     ),
 
-  deleteFile: (fileId: string) => api<{ ok: boolean }>(`/api/files/${fileId}`, { method: 'DELETE' }),
+  deleteFile: (fileId: string) =>
+    api<{ ok: boolean; detachedMessages?: number; hint?: string }>(`/api/files/${fileId}`, { method: 'DELETE' }),
+
+  /** 批量删除共享文件（只删得掉自己有权限的那些，其余在 failed 里给原因） */
+  deleteFiles: (roomId: string, ids: string[]) =>
+    api<{ ok: boolean; deleted: string[]; failed: Array<{ id: string; error: string }>; detachedMessages: number }>(
+      `/api/rooms/${encodeURIComponent(roomId)}/files/delete`,
+      { method: 'POST', body: { ids } },
+    ),
 
   agents: (roomId: string) => api<{ agents: Member[] }>(`/api/rooms/${encodeURIComponent(roomId)}/agents`),
 

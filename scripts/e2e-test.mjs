@@ -478,6 +478,70 @@ async function run() {
 
   const exportAnon = await api(`/api/rooms/${ROOM}/export?format=md`);
   check('未登录不能导出聊天记录（401）', exportAnon.status === 401);
+
+  /* 17. 文件区：删除文件要同步摘掉聊天里的附件引用 */
+  const uploadRaw = async (name, content) => {
+    const res = await api(`/api/rooms/${ROOM}/files`, {
+      method: 'POST',
+      token: tokens[alice],
+      raw: true,
+      body: new Uint8Array(Buffer.from(content)),
+      headers: { 'X-File-Name': encodeURIComponent(name), 'Content-Type': 'text/plain' },
+    });
+    return res.data.file;
+  };
+  const delFile = await uploadRaw('待删文件.txt', 'delete me');
+  const filesBefore = await api(`/api/rooms/${ROOM}/files`, { token: tokens[alice] });
+  check('文件列表带容量统计（stats）', Number.isFinite(filesBefore.data.stats?.totalBytes), `total=${filesBefore.data.stats?.totalBytes}`);
+  const msgsWithFile = await fetchMessages(60);
+  const fileMsgId = msgsWithFile.find((m) => (m.files ?? []).includes(delFile.id))?.id;
+  const delRes = await api(`/api/files/${delFile.id}`, { method: 'DELETE', token: tokens[alice] });
+  check('删除文件时同步清理聊天附件引用', delRes.ok && delRes.data.detachedMessages >= 1, delRes.data.hint ?? '');
+  const msgAfterDelete = (await fetchMessages(60)).find((m) => m.id === fileMsgId);
+  check(
+    '被删附件从消息里摘掉并标记 fileDeleted',
+    Boolean(msgAfterDelete) &&
+      !(msgAfterDelete.files ?? []).includes(delFile.id) &&
+      (msgAfterDelete.meta?.fileDeleted ?? []).includes(delFile.id),
+  );
+  const bulkDel = await api(`/api/rooms/${ROOM}/files/delete`, {
+    method: 'POST',
+    token: tokens[alice],
+    body: { ids: ['f_不存在'] },
+  });
+  check('批量删除：坏 id 进 failed 而不是整体失败', bulkDel.ok && bulkDel.data.failed?.length === 1);
+
+  /* 18. 房间级上下文预算（提示词按房间 meta 截断） */
+  const budgetRoom = await api('/api/rooms', {
+    method: 'POST',
+    token: tokens[alice],
+    body: { name: `e2e-budget-${RUN}`, members: [`codex-${suffix}`] },
+  });
+  const budgetRoomId = budgetRoom.data.room.id;
+  for (let i = 1; i <= 4; i += 1) {
+    await api(`/api/rooms/${budgetRoomId}/messages`, { method: 'POST', token: tokens[alice], body: { text: `预算测试第 ${i} 句` } });
+  }
+  await api(`/api/rooms/${budgetRoomId}`, { method: 'PATCH', token: tokens[alice], body: { meta: { contextLines: 2 } } });
+  const budgetPrompt = await api(`/api/rooms/${budgetRoomId}/agents/codex-${suffix}/prompt`, { token: tokens[alice] });
+  const keptLines = (String(budgetPrompt.data.prompt ?? '').match(/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\] @/gm) ?? []).length;
+  check('房间 meta 的 contextLines 生效（只带最近 2 条）', keptLines > 0 && keptLines <= 2, `实际 ${keptLines} 条`);
+
+  /* 19. token 用量与 OpenAPI */
+  const usage = await api(`/api/usage?days=1&room=${encodeURIComponent(ROOM)}`, { token: tokens[alice] });
+  check(
+    '/api/usage 汇总结构正确（区分有上报/总调用）',
+    usage.ok &&
+      usage.data.total?.runs > 0 &&
+      Number.isFinite(usage.data.total?.measuredRuns) &&
+      usage.data.total.measuredRuns <= usage.data.total.runs,
+    `runs=${usage.data.total?.runs} measured=${usage.data.total?.measuredRuns}`,
+  );
+  const openapi = await api('/openapi.json');
+  check(
+    '/openapi.json 是可用的 OpenAPI 3.x 规格',
+    openapi.ok && String(openapi.data.openapi ?? '').startsWith('3.') && Object.keys(openapi.data.paths ?? {}).length > 25,
+    `${Object.keys(openapi.data.paths ?? {}).length} 个路径`,
+  );
 }
 
 function runCli(args, env) {

@@ -79,6 +79,12 @@ export function AgentLogsDialog({ open, onOpenChange, agentTag }: Props) {
                 {run.durationMs ? (
                   <span className="text-xs text-muted-foreground">耗时 {formatDuration(run.durationMs)}</span>
                 ) : null}
+                {run.tokensTotal ? (
+                  <span className="text-xs text-muted-foreground" title="CLI 自报的 token 用量；没报就不显示">
+                    {run.tokensTotal.toLocaleString()} tokens
+                    {run.costUsd ? ` · $${run.costUsd.toFixed(4)}` : ''}
+                  </span>
+                ) : null}
                 {run.triggerMsg ? (
                   <span className="text-xs text-muted-foreground">触发 #{run.triggerMsg}</span>
                 ) : (

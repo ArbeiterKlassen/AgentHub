@@ -4,9 +4,11 @@ import {
   getMessage,
   insertMessage,
   listRoomMemberTags,
+  listMessagesWithFile,
   newId,
   now,
   parseJson,
+  updateMessageFiles,
   updateMessageText,
   type MemberRow,
   type MessageRow,
@@ -122,6 +124,27 @@ export function removeSystemMessage(id: number): void {
 
 export function newChainId(): string {
   return newId('chain');
+}
+
+/**
+ * 文件被删除后，把聊天里对它的引用摘掉：消息本身留着（历史不该凭空消失），
+ * 但 files 里不再挂一个下载必 404 的 id，并打上 meta.fileDeleted 让界面显示「文件已删除」。
+ * 返回受影响的消息条数。
+ */
+export function detachFileFromMessages(roomId: string, fileId: string): number {
+  let affected = 0;
+  for (const row of listMessagesWithFile(roomId, fileId)) {
+    const files = parseJson<string[]>(row.files, []).filter((id) => id !== fileId);
+    const meta = parseJson<Record<string, unknown>>(row.meta, {});
+    const deleted = Array.isArray(meta.fileDeleted) ? (meta.fileDeleted as string[]) : [];
+    meta.fileDeleted = [...new Set([...deleted, fileId])];
+    const updated = updateMessageFiles(row.id, files, meta);
+    if (updated) {
+      broadcast({ type: 'message', roomId: updated.room_id, data: publicMessage(updated), ts: Date.now() });
+      affected += 1;
+    }
+  }
+  return affected;
 }
 
 export function replyOf(messageId: number): MessageRow | undefined {

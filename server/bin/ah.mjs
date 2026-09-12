@@ -8,7 +8,7 @@
  *   消息     send / history / tail
  *   文件     files list|upload|pull|rm
  *   AI       agent list|run|speak|runs / discuss / control pause|resume|stop
- *   运维     health / adapters / status
+ *   运维     health / adapters / status / doctor
  *
  * 凭据默认保存在 ~/.agenthub/profiles/<profile>.json，可用 --profile 区分多个身份。
  */
@@ -255,6 +255,8 @@ ${bold('AI 成员')}
 
 ${bold('运维')}
   ah health | ah adapters | ah status
+  ah doctor                             # 一条命令自查：连通/磁盘/身份/房间/适配器/文档
+  ah usage [--days 7] [--room general] [--tag codex-1]   # token 用量（CLI 自报的才算）
 
 ${dim('全局参数：--server URL --profile 名称 --tag TAG --token TOKEN --room 房间 --json')}
 ${dim('HTTPS 自签证书：加 --insecure（或设 AH_INSECURE=1），例如 --server https://127.0.0.1:8787 --insecure')}
@@ -881,6 +883,187 @@ async function cmdStatus() {
   out(res);
 }
 
+async function cmdUsage() {
+  const days = Number(FLAGS.days ?? 7) || 7;
+  const query = new URLSearchParams({ days: String(days) });
+  if (FLAGS.room ?? CONFIG.room) query.set('room', String(FLAGS.room ?? CONFIG.room));
+  if (FLAGS.tag) query.set('tag', String(FLAGS.tag));
+  const res = await request(`/api/usage?${query.toString()}`);
+  if (JSON_OUT) return out(res);
+  const rows = res.byAgent ?? [];
+  if (!rows.length) return out(`最近 ${days} 天没有运行记录。`);
+  const width = Math.max(...rows.map((r) => r.tag.length), 8);
+  out(
+    `${bold(`最近 ${days} 天用量`)}${res.room ? `｜房间「${res.room.name}」` : ''}\n` +
+      rows
+        .map(
+          (r) =>
+            `  @${r.tag.padEnd(width)}  ${String(r.tokensTotal).padStart(9)} tokens` +
+            `${r.costUsd ? `  $${r.costUsd.toFixed(4)}` : ''}` +
+            `  ${r.runs} 次调用（${r.measuredRuns} 次有上报）` +
+            dim(`  ${Math.round(r.durationMs / 1000)}s`),
+        )
+        .join('\n') +
+      `\n${dim('合计')} ${green(String(res.total?.tokensTotal ?? 0))} tokens｜${res.total?.runs ?? 0} 次调用` +
+      `${res.total?.costUsd ? `｜$${Number(res.total.costUsd).toFixed(4)}` : ''}\n` +
+      dim('说明：只有 CLI 自己上报了 token 才会计入（codex/claude 会报，多数本地模型不会）。'),
+  );
+}
+
+/* ------------------------------- doctor ------------------------------- */
+
+/**
+ * doctor 专用的「不退出进程」请求：诊断脚本要把每个失败都收集起来一起报告，
+ * 不能像正式命令那样一遇到错误就 die()。
+ */
+async function softRequest(pathname, { auth = true } = {}) {
+  const url = `${CONFIG.server.replace(/\/+$/, '')}${pathname}`;
+  const headers = {};
+  if (auth && CONFIG.token) headers.Authorization = `Bearer ${CONFIG.token}`;
+  try {
+    const res = await fetch(url, { headers });
+    const text = await res.text();
+    let data;
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = { raw: text };
+    }
+    return { ok: res.ok, status: res.status, data };
+  } catch (err) {
+    return { ok: false, status: 0, error: err?.message ?? String(err), data: {} };
+  }
+}
+
+function humanBytes(bytes) {
+  if (!Number.isFinite(bytes)) return '未知';
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${Math.round(bytes / 1024)} KB`;
+}
+
+/**
+ * ah doctor —— 一条命令把「为什么用不了」查清楚：
+ * 服务连通 / 磁盘余量 / 身份凭据 / 默认房间 / 适配器可用性 / 自签证书提示。
+ * 有 FAIL 时退出码为 1，可以直接放进脚本里当健康门禁。
+ */
+async function cmdDoctor() {
+  const rows = [];
+  const add = (level, name, detail) => rows.push({ level, name, detail: detail ?? '' });
+
+  add(
+    'info',
+    '服务地址',
+    `${CONFIG.server}｜profile「${profileName}」${CONFIG.insecure ? '｜--insecure（跳过证书校验）' : ''}`,
+  );
+
+  /* 1. 连通性 */
+  const health = await softRequest('/api/health', { auth: false });
+  if (!health.ok) {
+    add('fail', '服务连通', health.error ? `连不上：${health.error}` : `HTTP ${health.status} ${health.data?.error ?? ''}`);
+  } else {
+    add('ok', '服务连通', `AgentHub v${health.data.version}｜Node ${health.data.node}｜${health.data.platform}`);
+  }
+
+  /* 2. 运行状态与磁盘 */
+  const status = await softRequest('/api/status', { auth: false });
+  if (status.ok) {
+    const rt = status.data.runtime ?? {};
+    const orch = status.data.orchestrator ?? {};
+    const online = (rt.online ?? []).join('、') || '（无人在线）';
+    add(
+      'info',
+      '运行状态',
+      `在线：${online}｜活动任务 ${orch.activeRuns ?? 0}｜排队 ${JSON.stringify(orch.queues ?? {})}｜已暂停房间 ${
+        (orch.pausedRooms ?? []).length
+      }`,
+    );
+    if (rt.disk?.free != null) {
+      const low = rt.disk.free < 1024 ** 3;
+      add(low ? 'warn' : 'ok', '磁盘余量', `${humanBytes(rt.disk.free)} / ${humanBytes(rt.disk.total)}（数据目录 ${rt.dataDir ?? '-'}）`);
+    }
+  }
+
+  /* 3. 身份凭据 */
+  if (!CONFIG.token || !CONFIG.tag) {
+    add('warn', '身份凭据', `profile「${profileName}」没登录：ah register --tag <tag> --nickname <昵称> 或 ah login --tag <tag> --token <token>`);
+  } else {
+    const me = await softRequest('/api/me');
+    if (!me.ok) {
+      add('fail', '身份凭据', `@${CONFIG.tag} 校验失败（HTTP ${me.status}${me.data?.error ? `：${me.data.error}` : ''}）`);
+    } else {
+      add(
+        'ok',
+        '身份凭据',
+        `@${me.data.member.tag}（${me.data.member.nickname}）role=${me.data.member.role}｜${(me.data.rooms ?? []).length} 个房间`,
+      );
+    }
+  }
+
+  /* 4. 默认房间（profile 里的 room，或 --room 指定） */
+  const roomName = FLAGS.room ?? CONFIG.room;
+  if (!roomName) {
+    add('warn', '默认房间', 'profile 里没设默认房间：发送时会要求显式 --room（ah room use <房间> 可设）');
+  } else {
+    const room = await softRequest(`/api/rooms/${encodeURIComponent(roomName)}`);
+    if (!room.ok) {
+      add('fail', '默认房间', `「${roomName}」读不到（HTTP ${room.status}${room.data?.error ? `：${room.data.error}` : ''}）`);
+    } else {
+      const r = room.data.room;
+      const members = r.memberTags ?? [];
+      add('ok', '默认房间', `${r.name}｜${members.length} 成员 / ${r.messageCount} 条消息｜邀请码 ${r.code}`);
+      if (CONFIG.tag && !members.includes(CONFIG.tag)) {
+        add('fail', '房间成员身份', `@${CONFIG.tag} 不在「${r.name}」成员列表里，发言会被 403（ah room join ${r.name} --tag ${CONFIG.tag}）`);
+      }
+    }
+  }
+
+  /* 5. 适配器（AI CLI 能不能起进程，全看这里） */
+  const adapters = await softRequest('/api/adapters', { auth: false });
+  if (adapters.ok) {
+    const list = adapters.data.adapters ?? [];
+    const usable = list.filter((a) => a.available && !a.disabled);
+    add(
+      usable.length ? 'ok' : 'warn',
+      '适配器',
+      `可用 ${usable.length}/${list.length}：${usable.map((a) => a.id).join('、') || '（一个都没有）'}`,
+    );
+    for (const a of list.filter((x) => !x.available && !x.disabled)) {
+      add('warn', `适配器 ${a.id}`, `${a.probeDetail ?? '不可用'}｜可设 AH_CLI_SEARCH_PATHS 或改 data/adapters.json 指定路径`);
+    }
+  }
+
+  /* 6. 文档（外部 AI 自接入时最常问的就是「接口在哪」） */
+  const openapi = await softRequest('/openapi.json', { auth: false });
+  // 注意：前端是 SPA fallback，任何未知路径都会返回 200 的 index.html，
+  // 所以这里必须校验拿到的是不是真的 OpenAPI 文档，不能只看状态码。
+  const openapiOk = openapi.ok && Boolean(openapi.data?.openapi);
+  add(
+    openapiOk ? 'ok' : 'warn',
+    '接口文档',
+    openapiOk
+      ? `${CONFIG.server}/openapi.json｜${CONFIG.server}/llms.txt`
+      : `拿不到 /openapi.json（HTTP ${openapi.status}；服务端可能是旧版本，重新构建后重启）`,
+  );
+
+  if (JSON_OUT) {
+    return out({ ok: !rows.some((r) => r.level === 'fail'), checks: rows });
+  }
+
+  const mark = { ok: green('✔'), warn: yellow('!'), fail: red('✘'), info: dim('·') };
+  out(
+    `${bold('AgentHub 自检（ah doctor）')}\n` +
+      rows.map((r) => `  ${mark[r.level] ?? '·'} ${r.name.padEnd(14)} ${dim(r.detail)}`).join('\n'),
+  );
+  const fails = rows.filter((r) => r.level === 'fail');
+  const warns = rows.filter((r) => r.level === 'warn');
+  if (fails.length) {
+    process.stderr.write(`\n${red(`${fails.length} 项不通过`)}${warns.length ? `，${warns.length} 项提醒` : ''}\n`);
+    process.exit(1);
+  }
+  process.stdout.write(`\n${green('没有发现阻塞性问题')}${warns.length ? `（${warns.length} 项提醒，见上）` : ''}\n`);
+}
+
 /* -------------------------------- 分发 -------------------------------- */
 
 const table = {
@@ -900,6 +1083,8 @@ const table = {
   health: cmdHealth,
   adapters: cmdAdapters,
   status: cmdStatus,
+  doctor: cmdDoctor,
+  usage: cmdUsage,
 };
 
 const handler = table[COMMAND];

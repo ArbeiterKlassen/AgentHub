@@ -78,6 +78,11 @@ export interface RunRow {
   output: string;
   created_at: number;
   finished_at: number | null;
+  /** token 用量：CLI 报了就记，没报为 null */
+  tokens_in: number | null;
+  tokens_out: number | null;
+  tokens_total: number | null;
+  cost_usd: number | null;
 }
 
 let db: DatabaseSync | null = null;
@@ -178,7 +183,11 @@ function migrate(d: DatabaseSync): void {
       prompt      TEXT NOT NULL DEFAULT '',
       output      TEXT NOT NULL DEFAULT '',
       created_at  INTEGER NOT NULL,
-      finished_at INTEGER
+      finished_at INTEGER,
+      tokens_in   INTEGER,
+      tokens_out  INTEGER,
+      tokens_total INTEGER,
+      cost_usd    REAL
     );
     CREATE INDEX IF NOT EXISTS idx_runs_agent ON agent_runs (agent_tag, created_at);
   `);
@@ -189,6 +198,13 @@ function migrate(d: DatabaseSync): void {
     d.exec('ALTER TABLE rooms ADD COLUMN code TEXT');
   }
   d.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_rooms_code ON rooms (code)');
+
+  // 老库补用量列（③ token 统计：CLI 报了多少就记多少）
+  const runCols = d.prepare('PRAGMA table_info(agent_runs)').all() as unknown as Array<{ name: string }>;
+  for (const col of ['tokens_in', 'tokens_out', 'tokens_total'] as const) {
+    if (!runCols.some((c) => c.name === col)) d.exec(`ALTER TABLE agent_runs ADD COLUMN ${col} INTEGER`);
+  }
+  if (!runCols.some((c) => c.name === 'cost_usd')) d.exec('ALTER TABLE agent_runs ADD COLUMN cost_usd REAL');
 }
 
 /** 邀请码字符集：去掉 0/O/1/I 这些看起来像的，方便手输 */
@@ -484,6 +500,31 @@ export function deleteMessage(id: number): boolean {
   return Number(res.changes) > 0;
 }
 
+/** 改写一条消息的附件列表（文件被删除时把引用摘掉） */
+export function updateMessageFiles(
+  id: number,
+  files: string[],
+  meta?: Record<string, unknown>,
+): MessageRow | undefined {
+  const d = getDb();
+  if (meta) {
+    d.prepare('UPDATE messages SET files = ?, meta = ? WHERE id = ?').run(JSON.stringify(files), JSON.stringify(meta), id);
+  } else {
+    d.prepare('UPDATE messages SET files = ? WHERE id = ?').run(JSON.stringify(files), id);
+  }
+  return getMessage(id);
+}
+
+/**
+ * 找出引用了某个文件的消息。用 LIKE 粗筛（JSON 数组里存的是文件 id），
+ * 房间消息量不大，够用且不需要额外的关联表。
+ */
+export function listMessagesWithFile(roomId: string, fileId: string): MessageRow[] {
+  return getDb()
+    .prepare('SELECT * FROM messages WHERE room_id = ? AND files LIKE ?')
+    .all(roomId, `%"${fileId}"%`) as unknown as MessageRow[];
+}
+
 export interface HistoryQuery {
   roomId: string;
   limit?: number;
@@ -570,7 +611,9 @@ export function deleteFile(id: string): void {
 
 /* ------------------------------ agent runs ----------------------------- */
 
-export function insertRun(row: Omit<RunRow, 'finished_at'>): void {
+export function insertRun(
+  row: Omit<RunRow, 'finished_at' | 'tokens_in' | 'tokens_out' | 'tokens_total' | 'cost_usd'>,
+): void {
   getDb()
     .prepare(
       `INSERT INTO agent_runs
@@ -604,11 +647,16 @@ export function finishRun(
     duration_ms?: number | null;
     error?: string | null;
     output?: string;
+    tokens_in?: number | null;
+    tokens_out?: number | null;
+    tokens_total?: number | null;
+    cost_usd?: number | null;
   },
 ): void {
   getDb()
     .prepare(
-      `UPDATE agent_runs SET status = ?, exit_code = ?, duration_ms = ?, error = ?, output = ?, finished_at = ?
+      `UPDATE agent_runs SET status = ?, exit_code = ?, duration_ms = ?, error = ?, output = ?, finished_at = ?,
+              tokens_in = ?, tokens_out = ?, tokens_total = ?, cost_usd = ?
        WHERE id = ?`,
     )
     .run(
@@ -618,8 +666,50 @@ export function finishRun(
       patch.error ?? null,
       patch.output ?? '',
       now(),
+      patch.tokens_in ?? null,
+      patch.tokens_out ?? null,
+      patch.tokens_total ?? null,
+      patch.cost_usd ?? null,
       id,
     );
+}
+
+/**
+ * 用量汇总（按 agent / 房间 / 天）：token 统计靠 CLI 自报，没报的调用不会计入，
+ * 所以返回里带上 runs / measuredRuns 两个数，避免把「没报」当成「没用」。
+ */
+export function usageSummary(q: { roomId?: string; since?: number; byTag?: string }): Array<Record<string, unknown>> {
+  const where: string[] = [];
+  const params: Array<string | number> = [];
+  if (q.roomId) {
+    where.push('room_id = ?');
+    params.push(q.roomId);
+  }
+  if (q.byTag) {
+    where.push('agent_tag = ?');
+    params.push(q.byTag);
+  }
+  if (q.since) {
+    where.push('created_at >= ?');
+    params.push(q.since);
+  }
+  const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const rows = getDb()
+    .prepare(
+      `SELECT agent_tag,
+              COUNT(*) AS runs,
+              SUM(CASE WHEN tokens_total IS NOT NULL THEN 1 ELSE 0 END) AS measured_runs,
+              SUM(COALESCE(tokens_in, 0)) AS tokens_in,
+              SUM(COALESCE(tokens_out, 0)) AS tokens_out,
+              SUM(COALESCE(tokens_total, 0)) AS tokens_total,
+              SUM(COALESCE(cost_usd, 0)) AS cost_usd,
+              SUM(COALESCE(duration_ms, 0)) AS duration_ms
+         FROM agent_runs ${clause}
+        GROUP BY agent_tag
+        ORDER BY tokens_total DESC`,
+    )
+    .all(...params) as unknown as Array<Record<string, unknown>>;
+  return rows;
 }
 
 export function listRuns(agentTag: string, limit = 20): RunRow[] {

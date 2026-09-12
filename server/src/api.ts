@@ -30,6 +30,7 @@ import {
   roomMessageCount,
   updateMember,
   updateRoom,
+  usageSummary,
   type MemberRow,
   type MessageRow,
   type RoomRow,
@@ -45,7 +46,7 @@ import {
 } from './auth.js';
 import { isExternalAdapter, loadAdapters, probeAll } from './adapters.js';
 import { handleDownload, handleUpload, listRoomFiles, publicFile, removeFile } from './files.js';
-import { publicMessage, postMessage, roomMemberTagSet, systemMessage } from './messages.js';
+import { detachFileFromMessages, publicMessage, postMessage, roomMemberTagSet, systemMessage } from './messages.js';
 import { broadcast, getAgentStatus, isOnline, runtimeSnapshot, subscribe, unsubscribe } from './hub.js';
 import {
   DEFAULT_ROOM_META,
@@ -61,7 +62,7 @@ import {
 } from './orchestrator.js';
 import { parseMentions } from './prompt.js';
 import { sha256 } from './db.js';
-import { PORT, REPO_ROOT, lanAddresses } from './env.js';
+import { DATA_DIR, PORT, REPO_ROOT, lanAddresses } from './env.js';
 import { check as rateCheck, recordFailure as rateFail, recordSuccess as rateOk } from './rateLimit.js';
 
 /** 取来源 IP（经过 Cloudflare Tunnel 时优先用 CF 带过来的真实 IP） */
@@ -882,6 +883,68 @@ export function buildApiRouter(): Router {
     }),
   );
 
+  /**
+   * token 用量汇总：GET /api/usage?room=&days=&tag=
+   * 只有 CLI 自己报了用量才会计入（codex 的 “tokens used”、claude 的 usage 字段），
+   * 所以每行都带 measuredRuns / runs —— 没数字代表「没上报」，不代表「没花钱」。
+   */
+  api.get(
+    '/usage',
+    wrap((req) => {
+      const me = requireAuth(req);
+      const days = Math.min(Math.max(Number(req.query.days ?? 7) || 7, 1), 365);
+      const roomParam = typeof req.query.room === 'string' && req.query.room.trim() ? req.query.room.trim() : '';
+      const room = roomParam ? resolveRoom(roomParam) : null;
+      if (room) requireRoomMember(req, room.id);
+      const byTag =
+        typeof req.query.tag === 'string' && req.query.tag.trim() ? assertTag(req.query.tag) : undefined;
+      if (byTag && byTag !== me.tag && me.role !== 'admin' && !canViewRuns(me, byTag)) {
+        throw new HttpError(403, '只能查看自己或同房间 AI 的用量');
+      }
+      const since = Date.now() - days * 86_400_000;
+      const rows = usageSummary({ roomId: room?.id, since, byTag });
+      const total = rows.reduce(
+        (
+          acc: {
+            runs: number;
+            measuredRuns: number;
+            tokensTotal: number;
+            tokensIn: number;
+            tokensOut: number;
+            costUsd: number;
+            durationMs: number;
+          },
+          r: Record<string, unknown>,
+        ) => ({
+          runs: acc.runs + Number(r.runs ?? 0),
+          measuredRuns: acc.measuredRuns + Number(r.measured_runs ?? 0),
+          tokensTotal: acc.tokensTotal + Number(r.tokens_total ?? 0),
+          tokensIn: acc.tokensIn + Number(r.tokens_in ?? 0),
+          tokensOut: acc.tokensOut + Number(r.tokens_out ?? 0),
+          costUsd: acc.costUsd + Number(r.cost_usd ?? 0),
+          durationMs: acc.durationMs + Number(r.duration_ms ?? 0),
+        }),
+        { runs: 0, measuredRuns: 0, tokensTotal: 0, tokensIn: 0, tokensOut: 0, costUsd: 0, durationMs: 0 },
+      );
+      return {
+        window: { days, since },
+        room: room ? { id: room.id, name: room.name } : null,
+        total,
+        byAgent: rows.map((r) => ({
+          tag: String(r.agent_tag),
+          nickname: findMember(String(r.agent_tag))?.nickname ?? null,
+          runs: Number(r.runs ?? 0),
+          measuredRuns: Number(r.measured_runs ?? 0),
+          tokensIn: Number(r.tokens_in ?? 0),
+          tokensOut: Number(r.tokens_out ?? 0),
+          tokensTotal: Number(r.tokens_total ?? 0),
+          costUsd: Number(r.cost_usd ?? 0),
+          durationMs: Number(r.duration_ms ?? 0),
+        })),
+      };
+    }),
+  );
+
   /* ------------------------------- 文件 ------------------------------- */
 
   api.get(
@@ -889,7 +952,16 @@ export function buildApiRouter(): Router {
     wrap((req) => {
       const room = resolveRoom(req.params.room);
       requireRoomMember(req, room.id);
-      return { files: listRoomFiles(room.id, originOf(req)) };
+      const files = listRoomFiles(room.id, originOf(req));
+      return {
+        files,
+        // 共享文件区的容量概览：文件多了以后，「这房间占了多少空间」是个常用问题
+        stats: {
+          count: files.length,
+          totalBytes: files.reduce((sum, f) => sum + Number(f.size ?? 0), 0),
+          images: files.filter((f) => /^image\//.test(String(f.mime ?? ''))).length,
+        },
+      };
     }),
   );
 
@@ -922,7 +994,51 @@ export function buildApiRouter(): Router {
       if (!row) throw new HttpError(404, '文件不存在');
       if (row.uploader_tag !== me.tag && me.role !== 'admin') throw new HttpError(403, '只能删除自己上传的文件');
       const removed = removeFile(row.id);
-      return { ok: true, removed: removed.id };
+      // 删掉文件本身之后，聊天里那条「📎 上传了文件 X」会把附件引用摘掉，避免点开是 404
+      const detached = detachFileFromMessages(row.room_id, row.id);
+      return {
+        ok: true,
+        removed: removed.id,
+        detachedMessages: detached,
+        hint: detached ? `已同步清理聊天里 ${detached} 条消息的附件引用` : '聊天里没有引用它的消息',
+      };
+    }),
+  );
+
+  /**
+   * 批量删除文件（共享文件区多选删除用）：只删你有权限删的那些，
+   * 其余逐条返回失败原因，不会因为一个没权限就整批失败。
+   */
+  api.post(
+    '/rooms/:room/files/delete',
+    wrap((req) => {
+      const room = resolveRoom(req.params.room);
+      const me = requireRoomMember(req, room.id);
+      const ids = ((req.body as { ids?: unknown })?.ids ?? []) as unknown;
+      if (!Array.isArray(ids) || !ids.length) throw new HttpError(400, '缺少要删除的文件 id 列表（ids）');
+      const deleted: string[] = [];
+      const failed: Array<{ id: string; error: string }> = [];
+      let detached = 0;
+      for (const raw of ids.slice(0, 200)) {
+        const id = String(raw);
+        const row = getFile(id);
+        if (!row) {
+          failed.push({ id, error: '文件不存在' });
+          continue;
+        }
+        if (row.room_id !== room.id) {
+          failed.push({ id, error: '不属于本房间' });
+          continue;
+        }
+        if (row.uploader_tag !== me.tag && me.role !== 'admin') {
+          failed.push({ id, error: '只能删除自己上传的文件' });
+          continue;
+        }
+        removeFile(row.id);
+        detached += detachFileFromMessages(row.room_id, row.id);
+        deleted.push(row.id);
+      }
+      return { ok: true, deleted, failed, detachedMessages: detached };
     }),
   );
 
@@ -980,7 +1096,23 @@ export function buildApiRouter(): Router {
     }),
   );
 
-  api.get('/status', wrap(() => ({ runtime: runtimeSnapshot(), orchestrator: orchestratorStatus() })));
+  api.get(
+    '/status',
+    wrap(() => {
+      /** 磁盘余量：ah doctor 会用它提醒「再传几天文件就要满了」 */
+      let disk: { total: number; free: number } | null = null;
+      try {
+        const st = fs.statfsSync(DATA_DIR);
+        disk = { total: st.blocks * st.bsize, free: st.bavail * st.bsize };
+      } catch {
+        disk = null;
+      }
+      return {
+        runtime: { ...runtimeSnapshot(), dataDir: DATA_DIR, disk },
+        orchestrator: orchestratorStatus(),
+      };
+    }),
+  );
 
   api.get(
     '/health',
@@ -992,7 +1124,7 @@ export function buildApiRouter(): Router {
         time: now(),
         platform: process.platform,
         node: process.version,
-        dataDir: path.join(REPO_ROOT, 'data'),
+        dataDir: DATA_DIR,
         adapters: probes,
         lanUrls: lanAddresses().map((l) => `http://${l.address}:${PORT}`),
       };
@@ -1026,6 +1158,10 @@ function publicRun(row: {
   chain_id: string | null;
   hop: number;
   trigger_msg: number | null;
+  tokens_in?: number | null;
+  tokens_out?: number | null;
+  tokens_total?: number | null;
+  cost_usd?: number | null;
 }): Record<string, unknown> {
   return {
     id: row.id,
@@ -1041,6 +1177,10 @@ function publicRun(row: {
     triggerMsg: row.trigger_msg,
     createdAt: row.created_at,
     finishedAt: row.finished_at,
+    tokensIn: row.tokens_in ?? null,
+    tokensOut: row.tokens_out ?? null,
+    tokensTotal: row.tokens_total ?? null,
+    costUsd: row.cost_usd ?? null,
   };
 }
 

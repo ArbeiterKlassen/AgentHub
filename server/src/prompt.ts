@@ -92,6 +92,8 @@ export interface BuildPromptOptions {
   chainNote?: string;
   fileHint?: string;
   contextLines?: number;
+  /** 历史正文的字符预算（房间 meta 里可调；越小越省 token，越大越不容易忘事） */
+  contextMaxChars?: number;
   /** 本次调用的时间上限（毫秒），写进提示词让 AI 自己控制节奏 */
   timeoutMs?: number;
   /** 本次随消息附带的图片文件名（已作为图像输入提供） */
@@ -156,7 +158,7 @@ export function buildAgentPrompt(opts: BuildPromptOptions): string {
     lines.push('请直接看图回答；不要用工具去读这些文件，也不要在看不到时假装看到了（看不到就明说）。');
   }
   lines.push('');
-  const rendered = renderTranscript(recent);
+  const rendered = renderTranscript(recent, opts.contextMaxChars ?? 6000);
   lines.push(
     `【最近的群聊记录】（${rendered.kept ? `保留最近 ${rendered.kept}/${recent.length} 条` : '暂无'}，从旧到新）`,
   );

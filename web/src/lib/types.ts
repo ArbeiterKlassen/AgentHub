@@ -101,6 +101,11 @@ export interface RunRecord {
   triggerMsg: number | null;
   createdAt: number;
   finishedAt: number | null;
+  /** token 用量（CLI 自报；没报就是 null） */
+  tokensIn?: number | null;
+  tokensOut?: number | null;
+  tokensTotal?: number | null;
+  costUsd?: number | null;
   prompt?: string;
   output?: string;
 }

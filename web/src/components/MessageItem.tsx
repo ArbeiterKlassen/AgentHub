@@ -88,6 +88,9 @@ export function MessageItem({ message, members, files, replyTo, onReply, onDelet
     .map((id) => files.find((f) => f.id === id))
     .filter((f): f is SharedFile => Boolean(f));
 
+  /** 文件被删掉后聊天里不再有可点的附件，给这条消息补一个「文件已删除」的说明 */
+  const deletedFiles = (message.meta?.fileDeleted as string[] | undefined) ?? [];
+
   const doCopy = async () => {
     await copyText(message.text);
     setCopied(true);
@@ -174,6 +177,13 @@ export function MessageItem({ message, members, files, replyTo, onReply, onDelet
                 </a>
               ),
             )}
+          </div>
+        )}
+
+        {deletedFiles.length > 0 && (
+          <div className={cn('flex items-center gap-1 text-[11px] text-muted-foreground', isOwn && 'justify-end')}>
+            <Trash2 className="h-3 w-3" />
+            附件已被删除（{deletedFiles.length} 个）
           </div>
         )}
 

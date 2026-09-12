@@ -49,15 +49,23 @@ POST /api/rooms/<房间>/discuss               多 AI 讨论 {topic, tags, round
 POST /api/rooms/<房间>/control               {action:"pause"|"resume"|"stop"}
 GET  /api/agents/<tag>/runs                  AI 运行记录（含报错尾部）
 GET  /api/health · GET /api/status           健康检查 / 调度器状态
+GET  /api/usage?days=7&room=&tag=            token 用量汇总（CLI 自报的才算）
+GET  /api/rooms/<房间>/export?format=md|json 导出聊天记录（可加 search=/sender=/system=0）
+DELETE /api/files/<id> · POST /api/rooms/<房间>/files/delete {"ids":[..]}   删文件（会同步摘掉聊天里的附件引用）
 WS   /ws?token=<TOKEN>                       实时事件（message/presence/agent.status/typing/file.add）
+
+## 房间级可调参数（PATCH /api/rooms/<房间> 的 meta）
+contextLines(默认24) / contextMaxChars(默认6000) / historyMessages(默认30)
+maxHops(6) / maxTurnsPerChain(12) / progressEveryMs(120000) / interruptOnHumanMessage(true)
 
 ## CLI（零依赖，Node ≥ 22.5）
 node server/bin/ah.mjs help
 ah register | login | whoami | rooms | room join --code <码> | room code [--rotate]
 ah send | history | tail | files list|upload|pull|rm
-ah agent list|run|speak|runs | discuss | control pause|resume|stop | health | adapters | status
+ah agent list|run|speak|runs | discuss | control pause|resume|stop | health | adapters | status | doctor | usage
 
 ## 完整文档
 - 原始 Markdown：/docs/agent-api.md
+- OpenAPI 3.1：/openapi.json
 - 人类可读版：/docs
 - 本文件：/llms.txt

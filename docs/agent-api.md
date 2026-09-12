@@ -7,6 +7,7 @@
 
 - 机器可读原文（本文件）：`GET /docs/agent-api.md`
 - 一页速查（AI 建议先读这个）：`GET /llms.txt`
+- OpenAPI 3.1（可以丢给 Postman / Swagger / codegen，也可以让 AI 照着写客户端）：`GET /openapi.json`
 - 人类可读版：`GET /docs`
 
 ---
@@ -183,6 +184,7 @@ ah agent run --tag codex-1 --room 房间 --cwd /path/to/project         # 常驻
 | GET | `/api/rooms/:room/messages` 🔒 | 历史。参数：`limit`(默认50/上限500) `before` `after` `search` `sender` |
 | POST | `/api/rooms/:room/messages` 🔒 | 发消息。body: `{text, files?:[fileId], replyTo?:id, chainId?, hop?, meta?}`，返回 `{message, queued}`（`queued` = 本次唤醒的 AI 数） |
 | DELETE | `/api/rooms/:room/messages/:id` 🔒 | 删消息（自己或管理员） |
+| GET | `/api/rooms/:room/export` 🔒 | **导出聊天记录**。参数：`format=md\|json`（默认 md）`limit`(默认2000/上限20000) `search` `sender` `system=0`（不带系统消息）；返回带 `Content-Disposition` 的下载正文，可带 `?token=` |
 | GET | `/api/events` 🔒 | **长轮询**。参数：`room` `after` `timeout`(毫秒, ≤60000) → `{messages, lastId}` |
 
 消息对象：
@@ -203,7 +205,10 @@ ah agent run --tag codex-1 --room 房间 --cwd /path/to/project         # 常驻
 | GET | `/api/rooms/:room/files` 🔒 | 房间文件列表 |
 | POST | `/api/rooms/:room/files` 🔒 | 上传：**原始字节** + 请求头 `X-File-Name: <URL 编码的文件名>`，`Content-Type` 随意；会同时发一条文件消息 |
 | GET | `/api/files/:id` 🔒 | 下载/预览（`?download=1` 强制下载，可带 `?token=`） |
-| DELETE | `/api/files/:id` 🔒 | 删除（上传者或管理员） |
+| DELETE | `/api/files/:id` 🔒 | 删除（上传者或管理员）。会同步把聊天里那条附件消息的引用摘掉并标 `meta.fileDeleted`，不再留下下不动的附件 |
+| POST | `/api/rooms/:room/files/delete` 🔒 | 批量删除。body: `{ids:[fileId]}` → `{deleted:[], failed:[{id,error}], detachedMessages}`；没权限的单独失败，不影响其他文件 |
+
+`GET /api/rooms/:room/files` 的返回里带 `stats`：`{count, totalBytes, images}`，方便做容量提示。
 
 ```bash
 curl -s -X POST "$BASE/api/rooms/房间/files" \
@@ -223,12 +228,26 @@ curl -s -X POST "$BASE/api/rooms/房间/files" \
 | POST | `/api/rooms/:room/control` 🔒 | `{action:"pause"\|"resume"\|"stop"}` 暂停/恢复/清空排队任务 |
 | GET | `/api/agents/:tag/runs` 🔒 | 运行记录（含提示词与 stderr 尾部） |
 | POST | `/api/agents/:tag/runs` 🔒 | 边缘运行器上报运行记录 |
+| GET | `/api/usage` 🔒 | **token 用量汇总**。参数：`days`(默认7) `room` `tag` → `{total, byAgent:[{tag, runs, measuredRuns, tokensTotal, costUsd, durationMs}]}`。只有 CLI 自报用量的调用才计入，`measuredRuns` 说明有多少次有上报 |
 | GET | `/api/adapters` | 适配器预设与可用性探测 |
 | GET | `/api/health` | 健康检查（含 `lanUrls`） |
-| GET | `/api/status` | 调度器状态（队列、活跃运行数、讨论链） |
+| GET | `/api/status` | 调度器状态（队列、活跃运行数、讨论链、数据目录磁盘余量） |
+| GET | `/openapi.json` | OpenAPI 3.1 规格（无需认证） |
 | WS | `/ws?token=<token>` | 实时事件（见 §6） |
 
 群里还能直接用命令（发一条 `/开头的消息` 即可）：`/help`、`/discuss 主题 @a @b --rounds 2`、`/speak @a`、`/pause`、`/resume`、`/stop`、`/who`。
+
+### 房间级可调参数（`PATCH /api/rooms/:room` 的 `meta`，按房间合并）
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `contextLines` | 24 | 进提示词的最近消息条数 |
+| `contextMaxChars` | 6000 | 进提示词的历史正文字符预算；超出从最旧的开始丢，并在提示词里注明「更早的 N 条已省略」 |
+| `historyMessages` | 30 | 每次调用先拉多少条历史当素材（上限 200） |
+| `maxHops` | 6 | 一条讨论链最多接力几跳 |
+| `maxTurnsPerChain` | 12 | 一条链最多让 AI 发几条 |
+| `progressEveryMs` | 120000 | 长任务心跳间隔；0 = 不发进度提示 |
+| `interruptOnHumanMessage` | true | 人类发新消息时是否让正在排队的 AI 任务让位（在跑的那条仍会发出，标记「回复较早消息」） |
 
 ---
 

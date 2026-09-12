@@ -22,6 +22,7 @@ import { findMemberByToken, getDb, listRooms, listRoomMemberTags, isRoomMember }
 import { broadcast, subscribe, unsubscribe, type HubEvent } from './hub.js';
 import { loadAdapters } from './adapters.js';
 import { readApiDoc, readLlmsTxt, renderDocsPage } from './docs.js';
+import { openapiSpec } from './openapi.js';
 
 ensureDirs();
 
@@ -68,6 +69,14 @@ app.get('/llms.txt', (_req, res) => {
   const text = readLlmsTxt();
   if (!text) return res.status(404).type('text/plain').send('llms.txt 不存在');
   res.type('text/plain; charset=utf-8').send(text);
+});
+
+/**
+ * GET /openapi.json —— 机器可读的接口定义（外部 AI / 脚本接入时直接照它写客户端即可）。
+ * 不需要登录：接口文档本身不是秘密，能拿到文档的人本来也能自己试。
+ */
+app.get('/openapi.json', (_req, res) => {
+  res.type('application/json; charset=utf-8').send(JSON.stringify(openapiSpec(), null, 2));
 });
 
 app.get('/docs/agent-api.md', (_req, res) => {

@@ -9,6 +9,7 @@ import {
   Pause,
   Play,
   ScrollText,
+  Settings,
   StopCircle,
   Trash2,
   Upload,
@@ -25,6 +26,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AgentLogsDialog } from '@/components/dialogs/AgentLogsDialog';
+import { RoomSettingsDialog } from '@/components/dialogs/RoomSettingsDialog';
 import { apiClient, downloadRoomExport, downloadUrl } from '@/lib/api';
 import { isImageFile } from '@/lib/fileKind';
 import { formatDateTime, formatRelative, formatSize } from '@/lib/format';
@@ -51,16 +53,47 @@ const { members, files, loadingRoom, typing } = useChatStore();
   const token = useSessionStore((s) => s.token);
   const removeMember = useChatStore((s) => s.removeMember);
   const removeFile = useChatStore((s) => s.removeFile);
+  const removeFiles = useChatStore((s) => s.removeFiles);
   const upload = useChatStore((s) => s.upload);
   const control = useChatStore((s) => s.control);
   const speak = useChatStore((s) => s.speak);
   const [logsFor, setLogsFor] = useState<string | null>(null);
+  /** 共享文件区：管理模式下可多选删除 */
+  const [manageFiles, setManageFiles] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const list = activeRoomId ? (members[activeRoomId] ?? []) : [];
   const roomFiles = activeRoomId ? (files[activeRoomId] ?? []) : [];
   const typingTags = activeRoomId ? (typing[activeRoomId] ?? []).map((t) => t.tag) : [];
   const agents = list.filter((m) => m.kind === 'agent');
+  const deletableFiles = roomFiles.filter((f) => me && (f.uploaderTag === me.tag || me.role === 'admin'));
+  const filesTotalBytes = roomFiles.reduce((sum, f) => sum + (f.size ?? 0), 0);
+
+  const toggleFileSelected = (id: string) => {
+    setSelectedFiles((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const deleteSelectedFiles = async () => {
+    if (!selectedFiles.length) return;
+    const ok = window.confirm(
+      `确定删除选中的 ${selectedFiles.length} 个文件？\n文件会从磁盘上删掉，聊天里对应的附件会标记为「已被删除」。`,
+    );
+    if (!ok) return;
+    try {
+      const res = await removeFiles(selectedFiles);
+      const failed = res.failed?.length ?? 0;
+      pushToast(
+        `已删除 ${res.deleted.length} 个文件${failed ? `，${failed} 个没删掉（没权限或已不存在）` : ''}`,
+        failed ? 'error' : 'success',
+      );
+      setSelectedFiles([]);
+      setManageFiles(false);
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error');
+    }
+  };
 
   const onFiles = async (fileList: FileList | null) => {
     if (!fileList?.length) return;
@@ -200,6 +233,14 @@ const { members, files, loadingRoom, typing } = useChatStore();
                   <p className="mt-1 text-[10px] text-muted-foreground">想按关键词搜/只导出一部分，用标题栏的搜索</p>
                 </div>
               )}
+
+              {room && (
+                <Button variant="outline" size="sm" className="w-full" onClick={() => setSettingsOpen(true)}>
+                  <Settings className="h-3.5 w-3.5" />
+                  房间设置（上下文预算 / 接力上限 / 心跳）
+                </Button>
+              )}
+
               {onAddMember && (
                 <Button variant="outline" size="sm" className="w-full" onClick={onAddMember}>
                   <UserPlus className="h-3.5 w-3.5" />
@@ -257,13 +298,73 @@ const { members, files, loadingRoom, typing } = useChatStore();
                 <Upload className="h-3.5 w-3.5" />
                 上传文件到共享文件区
               </Button>
+
+              {/* 文件区概览 + 批量管理入口 */}
+              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                <span>
+                  {roomFiles.length} 个文件 · 共 {formatSize(filesTotalBytes)}
+                </span>
+                {deletableFiles.length > 0 && (
+                  <button
+                    type="button"
+                    className="ml-auto rounded border border-dashed px-1.5 py-0.5 transition-colors hover:bg-accent"
+                    onClick={() => {
+                      setManageFiles((v) => !v);
+                      setSelectedFiles([]);
+                    }}
+                  >
+                    {manageFiles ? '取消管理' : '管理／批量删除'}
+                  </button>
+                )}
+              </div>
+
+              {manageFiles && (
+                <div className="rounded-lg border border-dashed bg-muted/30 p-2">
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <button
+                      type="button"
+                      className="text-muted-foreground underline-offset-2 hover:underline"
+                      onClick={() =>
+                        setSelectedFiles(
+                          selectedFiles.length === deletableFiles.length ? [] : deletableFiles.map((f) => f.id),
+                        )
+                      }
+                    >
+                      {selectedFiles.length === deletableFiles.length ? '全不选' : '全选可删的'}
+                    </button>
+                    <span className="text-muted-foreground">
+                      已选 {selectedFiles.length}／可删 {deletableFiles.length}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="ml-auto h-6 px-2 text-[11px] text-destructive"
+                      disabled={!selectedFiles.length}
+                      onClick={() => void deleteSelectedFiles()}
+                    >
+                      <Trash2 className="mr-1 h-3 w-3" />
+                      删除选中
+                    </Button>
+                  </div>
+                  <p className="mt-1 text-[10px] text-muted-foreground">
+                    能删的是你自己上传的（管理员可以删全部）。删除后聊天里的附件会显示「已被删除」，记录本身保留。
+                  </p>
+                </div>
+              )}
+
               {!roomFiles.length && (
                 <p className="py-4 text-center text-xs text-muted-foreground">
                   还没有共享文件。上传的文件会同时以消息形式出现在群里，AI 也能看到文件名。
                 </p>
               )}
               {roomFiles.map((file) => (
-                <div key={file.id} className="rounded-lg border bg-card p-2">
+                <div
+                  key={file.id}
+                  className={cn(
+                    'rounded-lg border bg-card p-2',
+                    manageFiles && selectedFiles.includes(file.id) && 'ring-1 ring-primary/50',
+                  )}
+                >
                   {isImageFile(file) && (
                     <ImageAttachment
                       file={file}
@@ -275,6 +376,18 @@ const { members, files, loadingRoom, typing } = useChatStore();
                     />
                   )}
                   <div className="flex items-center gap-2">
+                    {manageFiles &&
+                      (deletableFiles.some((f) => f.id === file.id) ? (
+                        <input
+                          type="checkbox"
+                          className="h-3.5 w-3.5 shrink-0 accent-primary"
+                          checked={selectedFiles.includes(file.id)}
+                          onChange={() => toggleFileSelected(file.id)}
+                          title="选中后可批量删除"
+                        />
+                      ) : (
+                        <span className="h-3.5 w-3.5 shrink-0" title="这个文件不是你上传的，删不了" />
+                      ))}
                     {isImageFile(file) ? (
                       <span className="h-4 w-4 shrink-0 text-center text-[11px] leading-4">🖼</span>
                     ) : (
@@ -296,8 +409,8 @@ const { members, files, loadingRoom, typing } = useChatStore();
                         title="删除"
                         onClick={async () => {
                           try {
-                            await removeFile(file.id);
-                            pushToast('文件已删除', 'success');
+                            const res = await removeFile(file.id);
+                            pushToast(res?.hint ? `文件已删除；${res.hint}` : '文件已删除', 'success');
                           } catch (err) {
                             pushToast(err instanceof Error ? err.message : String(err), 'error');
                           }
@@ -369,6 +482,7 @@ const { members, files, loadingRoom, typing } = useChatStore();
       )}
 
       <AgentLogsDialog open={Boolean(logsFor)} onOpenChange={(open) => !open && setLogsFor(null)} agentTag={logsFor} />
+      <RoomSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} room={room ?? null} />
     </aside>
   );
 }

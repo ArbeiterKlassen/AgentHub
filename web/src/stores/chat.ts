@@ -35,7 +35,8 @@ interface ChatState {
   clearFocus: () => void;
   upload: (file: File) => Promise<void>;
   removeMessage: (id: number) => Promise<void>;
-  removeFile: (id: string) => Promise<void>;
+  removeFile: (id: string) => Promise<{ detachedMessages?: number; hint?: string }>;
+  removeFiles: (ids: string[]) => Promise<{ deleted: string[]; failed: Array<{ id: string; error: string }> }>;
   removeMember: (tag: string) => Promise<void>;
   addMember: (tag: string) => Promise<void>;
   control: (action: 'pause' | 'resume' | 'stop') => Promise<void>;
@@ -179,11 +180,29 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   removeFile: async (id) => {
     const roomId = get().activeRoomId;
-    if (!roomId) return;
-    await apiClient.deleteFile(id);
+    if (!roomId) return {};
+    const res = await apiClient.deleteFile(id);
     set((state) => ({
       files: { ...state.files, [roomId]: (state.files[roomId] ?? []).filter((f) => f.id !== id) },
     }));
+    /* 聊天里那条附件消息被摘掉引用后要跟着更新（否则还挂着个下不动的附件） */
+    if (res.detachedMessages) await get().refreshRoom(roomId);
+    return res;
+  },
+
+  /** 批量删除共享文件：删完若聊天里的附件引用被清理过，就刷一次房间把消息同步过来 */
+  removeFiles: async (ids) => {
+    const roomId = get().activeRoomId;
+    if (!roomId || !ids.length) return { deleted: [], failed: [] };
+    const res = await apiClient.deleteFiles(roomId, ids);
+    set((state) => ({
+      files: {
+        ...state.files,
+        [roomId]: (state.files[roomId] ?? []).filter((f) => !res.deleted.includes(f.id)),
+      },
+    }));
+    if (res.detachedMessages) await get().refreshRoom(roomId);
+    return { deleted: res.deleted, failed: res.failed ?? [] };
   },
 
   removeMember: async (tag) => {

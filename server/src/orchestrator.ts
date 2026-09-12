@@ -90,6 +90,12 @@ export const DEFAULT_ROOM_META = {
   progressEveryMs: ROOM_DEFAULTS.progressEveryMs,
   /** 后续心跳间隔 */
   progressRepeatMs: ROOM_DEFAULTS.progressRepeatMs,
+  /** 拉多少条历史消息当素材（房间级可调：长讨论的群可以放大） */
+  historyMessages: ROOM_DEFAULTS.historyMessages,
+  /** 其中最近多少条进提示词 */
+  contextLines: ROOM_DEFAULTS.contextLines,
+  /** 提示词里历史正文的字符预算：太大容易顶爆 CLI 的上下文，太小会忘事 */
+  contextMaxChars: ROOM_DEFAULTS.contextMaxChars,
 };
 
 /** 外部客户端超过这么久没动静，@ 它时会在群里提醒一句「它可能收不到」 */
@@ -280,9 +286,14 @@ export function prepareJob(job: {
   if (!adapter) throw new HttpError(400, `适配器 ${agent.adapter_id} 未在 adapters.json 中定义`);
 
   const trigger = job.triggerMsgId ? (getMessage(job.triggerMsgId) ?? null) : null;
+  const conf = roomMeta(room);
+  const clampInt = (value: unknown, fallback: number, min: number, max: number): number => {
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? Math.min(Math.max(Math.round(n), min), max) : fallback;
+  };
   const history = listMessages({
     roomId: job.roomId,
-    limit: 30,
+    limit: clampInt(conf.historyMessages, ROOM_DEFAULTS.historyMessages, 1, 200),
     before: trigger ? trigger.id : undefined,
   });
   const transcript = [...history, ...(trigger ? [trigger] : [])].map(messageToTranscript);
@@ -316,6 +327,8 @@ export function prepareJob(job: {
     trigger: trigger ? messageToTranscript(trigger) : null,
     fileHint,
     timeoutMs,
+    contextLines: clampInt(conf.contextLines, ROOM_DEFAULTS.contextLines, 1, 200),
+    contextMaxChars: clampInt(conf.contextMaxChars, ROOM_DEFAULTS.contextMaxChars, 500, 200_000),
     imageNames: attachedImages.map((img) => img.name),
     chainNote: job.round
       ? undefined
@@ -516,6 +529,11 @@ async function executeJob(job: Job): Promise<void> {
     exit_code: run.exitCode,
     duration_ms: run.durationMs,
     error: run.error ?? null,
+    // token 用量：CLI 报了就记（codex 的 "tokens used"、claude 的 usage 字段），没报就是 null
+    tokens_in: run.usage?.input ?? null,
+    tokens_out: run.usage?.output ?? null,
+    tokens_total: run.usage?.total ?? null,
+    cost_usd: run.usage?.costUsd ?? null,
     // 运行记录里同时留下 stdout 与 stderr 尾部：排查「CLI 退出码 1」这类问题时，原因通常只在 stderr 末尾
     output: [run.stdout, run.stderr ? `\n--- stderr ---\n${run.stderr.slice(-6000)}` : '']
       .join('')
@@ -562,13 +580,17 @@ async function executeJob(job: Job): Promise<void> {
   //     毕竟这次 AI 调用已经烧掉了（平均 20–200 秒），丢掉纯属浪费
   const liveChain = chains.get(chainId);
   if (liveChain?.stopped && liveChain.reason !== 'superseded') {
-    finishRun(runId, {
-      status: 'dropped',
-      exit_code: run.exitCode,
-      duration_ms: run.durationMs,
-      error: '讨论链已停止，回帖被丢弃',
-      output: run.stdout.slice(-20_000),
-    });
+      finishRun(runId, {
+        status: 'dropped',
+        exit_code: run.exitCode,
+        duration_ms: run.durationMs,
+        error: '讨论链已停止，回帖被丢弃',
+        output: run.stdout.slice(-20_000),
+        tokens_in: run.usage?.input ?? null,
+        tokens_out: run.usage?.output ?? null,
+        tokens_total: run.usage?.total ?? null,
+        cost_usd: run.usage?.costUsd ?? null,
+      });
     setAgentStatus(agent.tag, 'idle');
     systemMessage(
       room.id,
@@ -914,7 +936,8 @@ export function orchestratorStatus(): Record<string, unknown> {
   return {
     activeRuns,
     pausedRooms: [...pausedRooms],
-    queues: Object.fromEntries([...queues.entries()].map(([tag, q]) => [tag, q.length])),
+    // 只报还有任务的队列：空队列会一直挂在表里（成员删了也留着），列出来只是噪音
+    queues: Object.fromEntries([...queues.entries()].filter(([, q]) => q.length > 0).map(([tag, q]) => [tag, q.length])),
     chains: [...chains.entries()].map(([id, c]) => ({
       id,
       roomId: c.roomId,

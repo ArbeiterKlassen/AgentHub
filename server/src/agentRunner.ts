@@ -26,6 +26,70 @@ export interface AgentRunResult {
   durationMs: number;
   error?: string;
   command: string;
+  /** 这次调用烧掉多少 token（CLI 报了就记，没报就不记——不猜） */
+  usage?: RunUsage;
+}
+
+export interface RunUsage {
+  input?: number;
+  output?: number;
+  total?: number;
+  costUsd?: number;
+}
+
+const toInt = (value: unknown): number | undefined => {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
+  if (typeof value === 'string' && value.trim()) {
+    const n = Number(value.replace(/[,\s_]/g, ''));
+    if (Number.isFinite(n)) return Math.round(n);
+  }
+  return undefined;
+};
+
+/**
+ * 从 CLI 输出里抠 token 用量。各家格式都不一样，这里覆盖常见的几种：
+ *  - claude --output-format json ：{"total_cost_usd":0.01,"usage":{"input_tokens":..,"output_tokens":..}}
+ *  - codex exec --json           ：{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{...}}}}
+ *  - codex exec 普通输出          ：末行 "tokens used\n12,345"
+ * 抠不到就返回 undefined —— 宁可没有数字，也不要编一个。
+ */
+function parseUsage(stdout: string, stderr: string): RunUsage | undefined {
+  const usage: RunUsage = {};
+  const absorb = (raw: unknown): void => {
+    if (!raw || typeof raw !== 'object') return;
+    const u = raw as Record<string, unknown>;
+    usage.input ??= toInt(u.input_tokens ?? u.prompt_tokens);
+    usage.output ??= toInt(u.output_tokens ?? u.completion_tokens);
+    usage.total ??= toInt(u.total_tokens);
+  };
+
+  for (const line of stdout.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('{')) continue;
+    let obj: Record<string, unknown>;
+    try {
+      obj = JSON.parse(trimmed) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    absorb(obj.usage);
+    const payload = obj.payload as Record<string, unknown> | undefined;
+    const info = payload?.info as Record<string, unknown> | undefined;
+    absorb(info?.total_token_usage ?? info?.last_token_usage);
+    if (typeof obj.total_cost_usd === 'number') usage.costUsd ??= obj.total_cost_usd;
+  }
+
+  if (usage.total === undefined) {
+    const match = /tokens?\s+used[^\d]{0,12}([\d.,]+)/i.exec(`${stderr}\n${stdout}`);
+    if (match) usage.total = toInt(match[1]);
+  }
+  if (usage.total === undefined && (usage.input !== undefined || usage.output !== undefined)) {
+    usage.total = (usage.input ?? 0) + (usage.output ?? 0);
+  }
+  if (usage.input === undefined && usage.output === undefined && usage.total === undefined && usage.costUsd === undefined) {
+    return undefined;
+  }
+  return usage;
 }
 
 const ANSI_RE = /\u001b\[[0-9;?]*[a-zA-Z]/g;
@@ -366,15 +430,18 @@ async function runCliAdapter(opts: AgentRunOptions): Promise<AgentRunResult> {
         text = parseCodexJsonl(stdout) ?? text;
       }
       cleanup();
+      const finalStdout = stripAnsi(stdout);
+      const finalStderr = stripAnsi(stderr);
       resolve({
         ok: result.ok,
         text: stripAnsi(text).trim(),
-        stdout: stripAnsi(stdout).slice(-200_000),
-        stderr: stripAnsi(stderr).slice(-40_000),
+        stdout: finalStdout.slice(-200_000),
+        stderr: finalStderr.slice(-40_000),
         exitCode: result.exitCode ?? null,
         durationMs: Date.now() - started,
         error: result.error,
         command: `${command} ${rawArgs.join(' ')}`.trim(),
+        usage: parseUsage(finalStdout, finalStderr),
       });
     };
 
