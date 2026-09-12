@@ -72,16 +72,21 @@ function pidsOnPort(port) {
 }
 
 async function healthOk(timeoutMs = 2500) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(`${SCHEME}://127.0.0.1:${PORT}/api/health`, { signal: controller.signal });
-    return res.ok;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timer);
+  // 服务可能是 http 也可能是 https（自签证书），两种都试一下，别依赖调用方的环境变量
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+  for (const scheme of ['http', 'https']) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${scheme}://127.0.0.1:${PORT}/api/health`, { signal: controller.signal });
+      if (res.ok) return true;
+    } catch {
+      /* 试下一个协议 */
+    } finally {
+      clearTimeout(timer);
+    }
   }
+  return false;
 }
 
 async function restart() {
@@ -100,18 +105,20 @@ async function restart() {
   }
   await new Promise((r) => setTimeout(r, 2000));
 
-  const outLog = path.join(LOG_DIR, 'server-prod.out.log');
-  const errLog = path.join(LOG_DIR, 'server-prod.err.log');
-  spawn(
-    'cmd.exe',
-    ['/c', `node dist/index.js > "${outLog}" 2> "${errLog}"`],
-    { cwd: path.join(REPO, 'server'), detached: true, stdio: 'ignore', windowsHide: true },
-  ).unref();
+  // 用启动器重启：它会自动判断该用 HTTP 还是 HTTPS（有证书就用 HTTPS），
+  // 直接 `node dist/index.js` 会把 TLS 丢掉，导致隧道回源协议不匹配（502）。
+  spawn('cmd.exe', ['/c', 'start-agenthub.bat'], {
+    cwd: REPO,
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+    env: { ...process.env, AH_NO_BROWSER: '1' }, // 自动重启不弹浏览器
+  }).unref();
 
   for (let i = 0; i < 20; i += 1) {
     await new Promise((r) => setTimeout(r, 1000));
     if (await healthOk()) {
-      log(`✅ 服务已重启并响应健康检查：${SCHEME}://127.0.0.1:${PORT}`);
+      log(`✅ 服务已重启并响应健康检查（端口 ${PORT}）`);
       // 顺手跑一遍端到端自检，把「修复是否真的生效」写进日志
       log('开始跑端到端自检（node scripts/e2e-test.mjs）…');
       const summary = await new Promise((resolve) => {

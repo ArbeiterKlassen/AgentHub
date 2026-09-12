@@ -202,7 +202,16 @@ function needAuth() {
 
 async function currentRoom(explicit) {
   const room = explicit ?? CONFIG.room;
-  if (room) return room;
+  if (room) {
+    // 没显式指定、也没用 AH_ROOM 时用的是 profile 里的默认房间 —— 这曾经导致「发错群」，
+    // 所以在 stderr 上明确说一句（不影响 stdout 的 JSON 输出）。
+    if (!explicit && !process.env.AH_ROOM && !FLAGS.room) {
+      process.stderr.write(
+        dim(`（未指定 --room，使用 profile 里的默认房间「${room}」；要发到别的群请加 --room <房间>）\n`),
+      );
+    }
+    return room;
+  }
   const { rooms } = await request('/api/rooms');
   if (!rooms?.length) die('你还没有加入任何房间：ah room create <名字>');
   return rooms[0].name;

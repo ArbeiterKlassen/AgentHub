@@ -141,8 +141,10 @@ export function buildAgentPrompt(opts: BuildPromptOptions): string {
       '1. 先花 10 秒说一句「我准备做什么、预计多久」——直接输出这句话作为你的回复，不要等做完再一起说。',
     );
     lines.push(
-      `2. 中途报进度：用命令行发消息（环境变量里已经配好你的 AH_SERVER/AH_TAG/AH_TOKEN/AH_ROOM），例如` +
-        ` \`node "D:/multi-modal-ai/agenthub/server/bin/ah.mjs" send "进度：已核对 A 题 12/30 项，暂无冲突"\`。`,
+      `2. 中途报进度 / 传文件：用命令行，**务必显式带上 --room "${opts.roomName}"**` +
+        `（不要依赖默认房间，那个值可能还停在别的群，会发错群），例如：` +
+        ` \`node "D:/multi-modal-ai/agenthub/server/bin/ah.mjs" send "进度：已核对 12/30 项" --room "${opts.roomName}"\`；` +
+        ` 传文件：\`… files upload <本地文件> --room "${opts.roomName}"\`。`,
     );
     lines.push(`3. 留出至少 2 分钟收尾：先把结论发出来，细节留给下一轮，不要因为赶进度而静默到超时。`);
   }

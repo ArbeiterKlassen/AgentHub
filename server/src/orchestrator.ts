@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { DATA_DIR, PORT, REPO_ROOT, ROOM_DEFAULTS, SERVER_SCHEME, TLS_ENABLED } from './env.js';
 import {
@@ -343,6 +344,36 @@ async function executeJob(job: Job): Promise<void> {
   const runId = newRunId();
   const started = Date.now();
   const chainId = job.chainId ?? newChainId();
+
+  /**
+   * 把该 AI 身份的命令行 profile 同步成「当前房间」。
+   *
+   * 为什么需要：AI 在群里干长活时经常自己调 `ah` 命令（报进度、传文件），而
+   * codex / claude 这类 CLI 会用它们自己的 shell 环境策略过滤掉我们注入的 AH_* 环境变量，
+   * 于是 `ah` 会退回 profile 里存的 `room` —— 那个值可能还是它上一次待过的房间，
+   * 结果就是「B 组的内容被发到了 OccWorld 群」。每次运行前同步一次即可根治。
+   */
+  try {
+    const profileDir = path.join(os.homedir(), '.agenthub', 'profiles');
+    fs.mkdirSync(profileDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(profileDir, `${agent.tag}.json`),
+      `${JSON.stringify(
+        {
+          server: `${SERVER_SCHEME}://127.0.0.1:${PORT}`,
+          tag: agent.tag,
+          token: agent.token_secret,
+          room: room.name,
+          insecure: TLS_ENABLED,
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    );
+  } catch {
+    /* 尽力而为：写不了 profile 也不影响这次运行 */
+  }
 
   insertRun({
     id: runId,
