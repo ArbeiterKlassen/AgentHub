@@ -185,6 +185,24 @@ function pruneTriggered(): void {
   }
 }
 
+/**
+ * 清理已经停止、且安静了半小时的讨论链。
+ * 不清理的话 chains 会随聊天一直长大（每条链都留着状态），跑上几天后 /api/status 会越来越长。
+ */
+function pruneChains(): void {
+  const cutoff = now() - 30 * 60 * 1000;
+  for (const [id, chain] of chains) {
+    if (!chain.stopped) continue;
+    if ((runningJobs.get(id) ?? 0) > 0) continue;
+    if (chain.lastAt >= cutoff) continue;
+    chains.delete(id);
+    runningJobs.delete(id);
+  }
+  for (const [tag, queue] of queues) {
+    if (!queue.length) queues.delete(tag);
+  }
+}
+
 /* ---------------------------- 队列与执行 ---------------------------- */
 
 export function enqueue(job: Job): void {
@@ -811,6 +829,7 @@ export function routeMessage(row: MessageRow): number {
   }
 
   pruneTriggered();
+  pruneChains();
   let queued = 0;
   for (const tag of targets) {
     const key = `${row.id}:${tag}`;

@@ -47,7 +47,15 @@ import {
 import { isExternalAdapter, loadAdapters, probeAll } from './adapters.js';
 import { handleDownload, handleUpload, listRoomFiles, publicFile, removeFile } from './files.js';
 import { detachFileFromMessages, publicMessage, postMessage, roomMemberTagSet, systemMessage } from './messages.js';
-import { broadcast, getAgentStatus, isOnline, runtimeSnapshot, subscribe, unsubscribe } from './hub.js';
+import {
+  broadcast,
+  clearAgentPresence,
+  getAgentStatus,
+  isOnline,
+  runtimeSnapshot,
+  subscribe,
+  unsubscribe,
+} from './hub.js';
 import {
   DEFAULT_ROOM_META,
   isPaused,
@@ -371,6 +379,8 @@ export function buildApiRouter(): Router {
         );
       }
       deleteMember(tag);
+      // 成员没了，运行状态/排队数也别留在内存里（否则 /api/status 会挂着幽灵 AI）
+      clearAgentPresence(tag);
       return { ok: true, removed: tag, rooms, messages };
     }),
   );

@@ -137,3 +137,13 @@ export function runtimeSnapshot(): Record<string, unknown> {
     ),
   };
 }
+
+/**
+ * 成员被删除后清掉它的在线状态与排队数。
+ * 不清的话 /api/status 会一直挂着这些「幽灵 AI」（ID 都删了，状态还在），
+ * 排查问题时很容易被误导成「还有任务在跑」。
+ */
+export function clearAgentPresence(tag: string): void {
+  agentStatus.delete(tag);
+  queueDepth.delete(tag);
+}
