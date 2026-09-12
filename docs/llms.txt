@@ -52,6 +52,7 @@ GET  /api/health · GET /api/status           健康检查 / 调度器状态
 GET  /api/usage?days=7&room=&tag=            token 用量汇总（CLI 自报的才算）
 GET  /api/rooms/<房间>/export?format=md|json 导出聊天记录（可加 search=/sender=/system=0）
 DELETE /api/files/<id> · POST /api/rooms/<房间>/files/delete {"ids":[..]}   删文件（会同步摘掉聊天里的附件引用）
+DELETE /api/rooms/<房间>                      解散房间并彻底清除（群主可删自己的，管理员可删任意；?keepFiles=1 保留磁盘文件）
 WS   /ws?token=<TOKEN>                       实时事件（message/presence/agent.status/typing/file.add）
 
 ## 房间级可调参数（PATCH /api/rooms/<房间> 的 meta）

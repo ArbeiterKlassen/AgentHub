@@ -186,6 +186,49 @@ function pruneTriggered(): void {
 }
 
 /**
+ * 房间可能在任何时刻被解散（群主/管理员删房），而这时后台还挂着定时器、重试、讨论循环，
+ * 它们随时可能往这个已经不存在的房间发言 —— postMessage 会抛 404，
+ * 在 setInterval 里抛就是未捕获异常（直接把服务带崩）。所以所有「延迟/后台」的发消息动作都走这个包装。
+ */
+function safeSystemMessage(roomId: string, text: string, meta: Record<string, unknown> = {}): MessageRow | null {
+  if (!findRoom(roomId)) return null;
+  try {
+    return systemMessage(roomId, text, meta);
+  } catch {
+    /* 房间刚好在这一刻被删掉：当成没发生 */
+    return null;
+  }
+}
+
+/**
+ * 解散房间时清掉它在调度器里的痕迹：排队任务、讨论链、暂停状态、进行中的讨论标记。
+ * 不清的话排队任务会继续跑（然后往一个不存在的房间发消息），/api/status 里也一直挂着这个房间的链。
+ */
+export function purgeRoomRuntime(roomId: string): { jobs: number; chains: number } {
+  let jobs = 0;
+  for (const [tag, queue] of queues) {
+    const kept = queue.filter((job) => {
+      const hit = job.roomId === roomId;
+      if (hit) jobs += 1;
+      return !hit;
+    });
+    queue.length = 0;
+    queue.push(...kept);
+    setQueueDepth(tag, queue.length);
+  }
+  let chainCount = 0;
+  for (const [id, chain] of chains) {
+    if (chain.roomId !== roomId) continue;
+    chains.delete(id);
+    runningJobs.delete(id);
+    chainCount += 1;
+  }
+  pausedRooms.delete(roomId);
+  activeDiscussions.delete(roomId);
+  return { jobs, chains: chainCount };
+}
+
+/**
  * 清理已经停止、且安静了半小时的讨论链。
  * 不清理的话 chains 会随聊天一直长大（每条链都留着状态），跑上几天后 /api/status 会越来越长。
  */
@@ -228,7 +271,7 @@ async function pump(tag: string): Promise<void> {
       if (job.triggerMsgId) {
         const trigger = getMessage(job.triggerMsgId);
         if (trigger && Date.now() - trigger.created_at > ROOM_DEFAULTS.jobMaxAgeMs) {
-          systemMessage(
+          safeSystemMessage(
             job.roomId,
             `⏭ 跳过 @${job.agentTag} 的一次过期回应（触发消息 #${job.triggerMsgId} 已超过 ${Math.round(ROOM_DEFAULTS.jobMaxAgeMs / 60000)} 分钟）`,
             { chainId: job.chainId, level: 'warn' },
@@ -486,8 +529,9 @@ async function executeJob(job: Job): Promise<void> {
       `它在闷头做长活时不会自动发言，如需中止：发送 /stop（或在 AI 面板点「全部停止」）。`;
     const meta = { runId, agentTag: agent.tag, chainId, level: 'info', kind: 'run.progress' };
     if (progressMsgId === null) {
-      // 第一次：发一条心跳
-      progressMsgId = systemMessage(room.id, text, meta).id;
+      // 第一次：发一条心跳（房间可能已被解散，那就什么都别做）
+      const msg = safeSystemMessage(room.id, text, meta);
+      if (msg) progressMsgId = msg.id;
     } else {
       // 之后：原地改写这一条，而不是每 2 分钟刷一条新的（系统消息曾经占全群 25%）
       updateSystemMessage(progressMsgId, text, meta);
@@ -525,7 +569,7 @@ async function executeJob(job: Job): Promise<void> {
     // 「秒退 + 没有任何输出」基本是 provider / 网络抖动（实测遇到过：11 秒退出码 1、无输出），
     // 重试一次即可；真失败（超时、跑完才报错）不重试，避免重复扣费。
     if (!run.ok && !run.text.trim() && run.durationMs < 60_000) {
-      systemMessage(
+      safeSystemMessage(
         room.id,
         `↻ @${agent.tag} 首次调用失败（${run.error ?? '未知错误'}），2 秒后自动重试一次…`,
         { runId, agentTag: agent.tag, chainId, level: 'warn', kind: 'run.retry' },
@@ -540,6 +584,26 @@ async function executeJob(job: Job): Promise<void> {
     if (progressMsgId !== null) removeSystemMessage(progressMsgId);
     releaseSlot();
     runningJobs.set(chainId, Math.max(0, (runningJobs.get(chainId) ?? 1) - 1));
+  }
+
+  /**
+   * 这次调用期间房间被解散了（群主/管理员删房）：回帖已经没有落脚点，
+   * 只把运行记录收尾就好（agent_runs 的行也可能被一起清了，finishRun 会是空操作）。
+   */
+  if (!findRoom(room.id)) {
+    finishRun(runId, {
+      status: 'dropped',
+      exit_code: run.exitCode,
+      duration_ms: run.durationMs,
+      error: '房间已被解散，回帖丢弃',
+      output: run.stdout.slice(-20_000),
+      tokens_in: run.usage?.input ?? null,
+      tokens_out: run.usage?.output ?? null,
+      tokens_total: run.usage?.total ?? null,
+      cost_usd: run.usage?.costUsd ?? null,
+    });
+    setAgentStatus(agent.tag, 'idle');
+    return;
   }
 
   finishRun(runId, {
@@ -887,6 +951,8 @@ export async function startDiscussion(opts: DiscussionOptions): Promise<{ chainI
   try {
     for (let round = 1; round <= rounds; round += 1) {
       for (const tag of tags) {
+        // 房间中途被解散：剩下的轮次没有意义，直接结束（catch 里的提示也会因为房间没了而被忽略）
+        if (!findRoom(room.id)) throw new HttpError(404, '房间已被解散，讨论结束');
         if (pausedRooms.has(room.id)) throw new HttpError(409, '房间已暂停');
         await executeJob({
           roomId: room.id,
@@ -904,7 +970,7 @@ export async function startDiscussion(opts: DiscussionOptions): Promise<{ chainI
       }
     }
   } catch (err) {
-    systemMessage(
+    safeSystemMessage(
       room.id,
       `⚠️ 讨论中断：${err instanceof Error ? err.message : String(err)}`,
       { chainId, level: 'error' },
@@ -915,7 +981,7 @@ export async function startDiscussion(opts: DiscussionOptions): Promise<{ chainI
 
   const chain = chains.get(chainId);
   if (chain) chain.stopped = true;
-  systemMessage(room.id, `✅ 讨论结束（${turns} 次发言）`, { chainId, kind: 'discussion.end' });
+  safeSystemMessage(room.id, `✅ 讨论结束（${turns} 次发言）`, { chainId, kind: 'discussion.end' });
   return { chainId, turns };
 }
 

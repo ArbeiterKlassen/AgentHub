@@ -142,6 +142,52 @@ export function handleDownload(req: Request, res: Response, id: string): void {
   fs.createReadStream(row.stored_path).pipe(res);
 }
 
+/**
+ * 解散房间时把共享文件从磁盘上真正删掉。
+ * 只删数据库行的话，`data/files/<房间>/` 会一直躺在磁盘上（README 以前就写着"要手工清理"）。
+ * 做法是：先按数据库记录逐个删文件，再整个删掉这个房间的目录（兜住"行已删但文件还在"的残留）；
+ * 两条路径都做越界校验，确保只在 data/files 里面动手。
+ */
+export function purgeRoomFiles(roomId: string): {
+  files: number;
+  bytes: number;
+  dir: string;
+  dirRemoved: boolean;
+} {
+  const root = path.resolve(FILES_DIR) + path.sep;
+  const inside = (target: string): boolean => path.resolve(target).startsWith(root);
+  let files = 0;
+  let bytes = 0;
+
+  for (const row of listFiles(roomId)) {
+    try {
+      if (!fs.existsSync(row.stored_path)) continue;
+      if (!inside(row.stored_path)) {
+        console.warn(`[files] 跳过越界路径（不属于数据目录）：${row.stored_path}`);
+        continue;
+      }
+      bytes += fs.statSync(row.stored_path).size;
+      fs.rmSync(row.stored_path, { force: true });
+      files += 1;
+    } catch (err) {
+      console.warn(`[files] 删文件失败（继续删房）：${row.stored_path}`, err);
+    }
+  }
+
+  const dir = path.join(FILES_DIR, roomId);
+  let dirRemoved = false;
+  try {
+    if (inside(path.join(dir, 'x')) && fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      dirRemoved = true;
+    }
+  } catch (err) {
+    console.warn(`[files] 删房间目录失败：${dir}`, err);
+  }
+
+  return { files, bytes, dir, dirRemoved };
+}
+
 export function removeFile(id: string): FileRow {
   const row = getFile(id);
   if (!row) throw new HttpError(404, '文件不存在');

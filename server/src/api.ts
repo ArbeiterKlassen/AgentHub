@@ -28,6 +28,8 @@ import {
   removeRoomMember,
   rotateRoomCode,
   roomMessageCount,
+  purgeRoomRows,
+  roomArtifactCounts,
   updateMember,
   updateRoom,
   usageSummary,
@@ -45,7 +47,7 @@ import {
   assertTag,
 } from './auth.js';
 import { isExternalAdapter, loadAdapters, probeAll } from './adapters.js';
-import { handleDownload, handleUpload, listRoomFiles, publicFile, removeFile } from './files.js';
+import { handleDownload, handleUpload, listRoomFiles, publicFile, purgeRoomFiles, removeFile } from './files.js';
 import { detachFileFromMessages, publicMessage, postMessage, roomMemberTagSet, systemMessage } from './messages.js';
 import {
   broadcast,
@@ -62,6 +64,7 @@ import {
   orchestratorStatus,
   pauseRoom,
   promptForAgent,
+  purgeRoomRuntime,
   resumeRoom,
   routeMessage,
   speakNow,
@@ -575,18 +578,55 @@ export function buildApiRouter(): Router {
     }),
   );
 
+  /**
+   * 解散房间：**群主可以解散自己建的房间，管理员可以解散任意房间**。
+   * 默认是「彻底清除」——不只是数据库里的房间/消息/成员/运行记录，
+   * 连共享文件区在磁盘上的文件（data/files/<房间>/）也一起删掉；
+   * 想留档就加 ?keepFiles=1（文件留在磁盘上，返回里给出目录路径）。
+   */
   api.delete(
     '/rooms/:room',
     wrap((req) => {
-      requireAdmin(req);
       const room = resolveRoom(req.params.room);
-      const db = getDb();
-      db.prepare('DELETE FROM room_members WHERE room_id = ?').run(room.id);
-      db.prepare('DELETE FROM messages WHERE room_id = ?').run(room.id);
-      db.prepare('DELETE FROM files WHERE room_id = ?').run(room.id);
-      db.prepare('DELETE FROM rooms WHERE id = ?').run(room.id);
-      broadcast({ type: 'room.deleted', roomId: room.id, data: { id: room.id }, ts: Date.now() });
-      return { ok: true, removed: room.id };
+      const me = requireAuth(req);
+      const isOwner = room.created_by === me.tag;
+      if (!isOwner && me.role !== 'admin') {
+        throw new HttpError(403, '只有房间创建者或管理员可以解散房间');
+      }
+      const keepFiles = req.query.keepFiles === '1' || req.query.keepFiles === 'true';
+      const before = roomArtifactCounts(room.id);
+      // 1) 先掐掉调度器里这个房间的排队任务与讨论链，免得任务继续跑、往不存在的房间发言
+      const runtime = purgeRoomRuntime(room.id);
+      // 2) 再删磁盘上的共享文件（默认彻底删；keepFiles=1 时留着）
+      const disk = keepFiles
+        ? { files: 0, bytes: 0, dir: path.join(DATA_DIR, 'files', room.id), dirRemoved: false, kept: true as const }
+        : { ...purgeRoomFiles(room.id), kept: false as const };
+      // 3) 最后清数据库：成员关系、消息、文件记录、AI 运行记录、房间本身（同一个事务）
+      const rows = purgeRoomRows(room.id);
+      broadcast({ type: 'room.deleted', roomId: room.id, data: { id: room.id, name: room.name }, ts: Date.now() });
+      console.log(
+        `[room] @${me.tag} 解散了「${room.name}」：消息 ${rows.messages} 条、成员 ${rows.members} 个、` +
+          `文件 ${rows.files} 个（磁盘 ${disk.files} 个 / ${Math.round(disk.bytes / 1024)} KB）${
+            keepFiles ? '（文件按 keepFiles 保留在磁盘上）' : ''
+          }、运行记录 ${rows.runs} 条、排队任务 ${runtime.jobs} 个`,
+      );
+      return {
+        ok: true,
+        removed: room.id,
+        name: room.name,
+        by: me.tag,
+        deleted: { ...rows, queuedJobs: runtime.jobs, chainStates: runtime.chains, diskFiles: disk.files },
+        freedBytes: disk.bytes,
+        filesDir: disk.dir,
+        filesKept: keepFiles,
+        filesDirRemoved: disk.dirRemoved,
+        hint: keepFiles
+          ? `房间与聊天记录已删除，共享文件按你的要求保留在 ${disk.dir}`
+          : disk.files
+            ? `房间、聊天记录与 ${disk.files} 个共享文件已彻底删除`
+            : '房间与聊天记录已删除（该房间没有共享文件）',
+        before,
+      };
     }),
   );
 

@@ -140,6 +140,22 @@ export const apiClient = {
   patchRoom: (roomId: string, patch: Record<string, unknown>) =>
     api<{ room: RoomSummary }>(`/api/rooms/${encodeURIComponent(roomId)}`, { method: 'PATCH', body: patch }),
 
+  /**
+   * 解散房间：群主可解散自己建的房间，管理员可解散任意房间。
+   * 默认连磁盘上的共享文件一起彻底删除；keepFiles 时只删房间与聊天记录、文件留在磁盘上。
+   */
+  deleteRoom: (roomId: string, opts: { keepFiles?: boolean } = {}) =>
+    api<{
+      ok: boolean;
+      removed: string;
+      name: string;
+      deleted: { members: number; messages: number; files: number; runs: number; diskFiles: number; queuedJobs: number };
+      freedBytes: number;
+      filesDir: string;
+      filesKept: boolean;
+      hint: string;
+    }>(`/api/rooms/${encodeURIComponent(roomId)}${opts.keepFiles ? '?keepFiles=1' : ''}`, { method: 'DELETE' }),
+
   addMember: (roomId: string, tag: string) =>
     api<{ ok: boolean; members: string[] }>(`/api/rooms/${encodeURIComponent(roomId)}/members`, {
       method: 'POST',

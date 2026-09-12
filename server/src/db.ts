@@ -609,6 +609,48 @@ export function deleteFile(id: string): void {
   getDb().prepare('DELETE FROM files WHERE id = ?').run(id);
 }
 
+export interface RoomArtifactCounts {
+  members: number;
+  messages: number;
+  files: number;
+  runs: number;
+}
+
+/** 房间相关的数据量（解散前先报个数，让人知道删掉的是什么） */
+export function roomArtifactCounts(roomId: string): RoomArtifactCounts {
+  const one = (sql: string): number =>
+    Number((getDb().prepare(sql).get(roomId) as { n: number } | undefined)?.n ?? 0);
+  return {
+    members: one('SELECT COUNT(*) AS n FROM room_members WHERE room_id = ?'),
+    messages: one('SELECT COUNT(*) AS n FROM messages WHERE room_id = ?'),
+    files: one('SELECT COUNT(*) AS n FROM files WHERE room_id = ?'),
+    runs: one('SELECT COUNT(*) AS n FROM agent_runs WHERE room_id = ?'),
+  };
+}
+
+/**
+ * 解散房间：把这个房间在数据库里的痕迹全部清掉——成员关系、消息记录、文件记录、
+ * AI 运行记录（里面存着完整提示词与输出，同样属于聊天存档）、房间本身。
+ * 磁盘上的文件由 files.ts 的 purgeRoomFiles 负责，这里只管数据库。
+ */
+export function purgeRoomRows(roomId: string): RoomArtifactCounts {
+  const d = getDb();
+  const counts = roomArtifactCounts(roomId);
+  d.exec('BEGIN');
+  try {
+    d.prepare('DELETE FROM room_members WHERE room_id = ?').run(roomId);
+    d.prepare('DELETE FROM messages WHERE room_id = ?').run(roomId);
+    d.prepare('DELETE FROM files WHERE room_id = ?').run(roomId);
+    d.prepare('DELETE FROM agent_runs WHERE room_id = ?').run(roomId);
+    d.prepare('DELETE FROM rooms WHERE id = ?').run(roomId);
+    d.exec('COMMIT');
+  } catch (err) {
+    d.exec('ROLLBACK');
+    throw err;
+  }
+  return counts;
+}
+
 /* ------------------------------ agent runs ----------------------------- */
 
 export function insertRun(

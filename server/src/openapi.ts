@@ -403,9 +403,48 @@ export function openapiSpec(): Record<string, unknown> {
         },
         delete: {
           tags: ['房间'],
-          summary: '删除房间（仅管理员）',
-          parameters: [roomParam()],
-          responses: { 200: jsonResponse({ type: 'object', properties: { ok: { type: 'boolean' } } }), ...errorResponses() },
+          summary: '解散房间（群主删自己的，管理员删任意）',
+          description:
+            '默认**彻底清除**：成员关系、消息记录、AI 运行记录（含提示词与输出）都会从数据库删掉，\n' +
+            '共享文件区在磁盘上的文件（`data/files/<房间>/`）也会被删除。\n' +
+            '想保留文件留档就加 `?keepFiles=1`——房间与聊天记录照删，文件留在磁盘上并在返回里给出目录。\n' +
+            '解散时还会掐掉这个房间排队中的 AI 任务与讨论链，正在生成的回复会被丢弃。',
+          parameters: [
+            roomParam(),
+            {
+              name: 'keepFiles',
+              in: 'query',
+              schema: { type: 'string', enum: ['1'] },
+              description: '保留磁盘上的共享文件（只删房间与聊天记录）',
+            },
+          ],
+          responses: {
+            200: jsonResponse({
+              type: 'object',
+              properties: {
+                ok: { type: 'boolean' },
+                removed: { type: 'string' },
+                name: { type: 'string' },
+                deleted: {
+                  type: 'object',
+                  properties: {
+                    members: { type: 'integer' },
+                    messages: { type: 'integer' },
+                    files: { type: 'integer' },
+                    runs: { type: 'integer' },
+                    diskFiles: { type: 'integer' },
+                    queuedJobs: { type: 'integer' },
+                  },
+                },
+                freedBytes: { type: 'integer' },
+                filesDir: { type: 'string' },
+                filesKept: { type: 'boolean' },
+                filesDirRemoved: { type: 'boolean' },
+                hint: { type: 'string' },
+              },
+            }),
+            ...errorResponses(),
+          },
         },
       },
       '/api/rooms/{room}/members': {

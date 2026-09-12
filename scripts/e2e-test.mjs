@@ -4,12 +4,16 @@
  *
  *   node scripts/e2e-test.mjs [--server http://127.0.0.1:8787]
  *
+ * 可选：设 AH_ADMIN_TOKEN=<管理员的 token> 会额外验证「管理员可以解散任意房间」这一项
+ *       （自检自己注册的账号都是普通成员，拿不到管理员身份）。
+ *
  * 覆盖：健康检查 / 注册登录 / 建房加人 / 消息与 @唤醒 / AI 互相接力与跳数上限 /
  *       停止后不再有迟到回帖 / 共享文件上传下载 / ah CLI 拉取聊天记录 /
  *       暂停恢复 / 多 AI 讨论模式 / 邀请码 / 外部客户端在线状态 / @全体 反馈 / 聊天记录导出。
  */
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -542,6 +546,66 @@ async function run() {
     openapi.ok && String(openapi.data.openapi ?? '').startsWith('3.') && Object.keys(openapi.data.paths ?? {}).length > 25,
     `${Object.keys(openapi.data.paths ?? {}).length} 个路径`,
   );
+
+  /* 20. 解散房间：群主可删自己建的、管理员可删任意，并且磁盘文件一并清掉 */
+  const strangerTag = `stranger-${suffix}`;
+  await register(strangerTag, '路人');
+  const ownerRoom = await api('/api/rooms', {
+    method: 'POST',
+    token: newbie.data.token,
+    body: { name: `e2e-diss-${RUN}` },
+  });
+  const ownerRoomId = ownerRoom.data.room.id;
+  const dissFile = await api(`/api/rooms/${ownerRoomId}/files`, {
+    method: 'POST',
+    token: newbie.data.token,
+    raw: true,
+    body: new Uint8Array(Buffer.from('解散房间时要一起删掉的存档文件')),
+    headers: { 'Content-Type': 'text/plain', 'X-File-Name': encodeURIComponent('解散存档.txt') },
+  });
+
+  const strangerDel = await api(`/api/rooms/${ownerRoomId}`, { method: 'DELETE', token: tokens[strangerTag] });
+  check('非群主 / 非管理员不能解散别人的房间（403）', strangerDel.status === 403, `status=${strangerDel.status}`);
+
+  const ownerDel = await api(`/api/rooms/${ownerRoomId}`, { method: 'DELETE', token: newbie.data.token });
+  const dataDir = process.env.AH_DATA_DIR ? path.resolve(process.env.AH_DATA_DIR) : path.join(REPO, 'data');
+  const diskCheckable = String(ownerDel.data.filesDir ?? '').startsWith(dataDir);
+  check(
+    '群主（非管理员）可以解散自己建的房间',
+    ownerDel.ok && ownerDel.data.deleted?.messages >= 1,
+    `消息 ${ownerDel.data.deleted?.messages} 条 / 磁盘文件 ${ownerDel.data.deleted?.diskFiles} 个`,
+  );
+  check(
+    '解散时磁盘上的共享文件一并删除',
+    ownerDel.data.deleted?.diskFiles >= 1 && (!diskCheckable || fs.existsSync(ownerDel.data.filesDir) === false),
+    diskCheckable ? String(ownerDel.data.filesDir) : '（数据目录非默认，未做磁盘断言）',
+  );
+  const goneRoom = await api(`/api/rooms/${ownerRoomId}`, { token: tokens[alice] });
+  check('解散后房间与聊天记录彻底不可访问（404）', goneRoom.status === 404, `status=${goneRoom.status}`);
+  void dissFile;
+
+  /* 管理员可以解散任意房间（不是创建者） */
+  // 注意：自检注册的账号都是普通成员（只有库里第一个注册的人才是管理员），
+  // 所以这一项要显式给一个管理员 token：AH_ADMIN_TOKEN=<token> node scripts/e2e-test.mjs
+  const adminToken = process.env.AH_ADMIN_TOKEN ?? '';
+  if (adminToken) {
+    const adminTarget = await api('/api/rooms', {
+      method: 'POST',
+      token: newbie.data.token,
+      body: { name: `e2e-admin-diss-${RUN}` },
+    });
+    const adminDel = await api(`/api/rooms/${adminTarget.data.room.id}`, {
+      method: 'DELETE',
+      token: adminToken,
+    });
+    check(
+      '管理员可以解散任意房间（群主之外的房间）',
+      adminDel.ok && Boolean(adminDel.data.by),
+      `by=${adminDel.data.by ?? JSON.stringify(adminDel.data).slice(0, 80)}`,
+    );
+  } else {
+    console.log('\u001b[2mSKIP 管理员可以解散任意房间（未设 AH_ADMIN_TOKEN）\u001b[0m');
+  }
 }
 
 function runCli(args, env) {

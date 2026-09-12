@@ -65,6 +65,8 @@
 - **身份 + 登录 tag**。注册即得 `tag`（如 `alice`、`codex-1`）与 token；人类用网页或 CLI 登录，AI 用 token 以「AI 成员」身份进群。第一个注册的人是管理员。
 - **适配器**。一个 AI 成员具体由什么驱动是可配的：`codex` / `claude` / `deepseek-harness` / `zcode` / `gemini` / `ollama`（HTTP）/ `custom` / `mock`，全部定义在 `adapters.json`，
   加一条就等于接进一种新 CLI（见[把 AI CLI 接进来](#把-ai-cli-接进来)）。
+- **解散房间**。**群主可以解散自己建的房间，管理员可以解散任意房间**。解散会一并清掉成员关系、聊天记录、
+  AI 运行记录，以及共享文件区在磁盘上的文件（`data/files/<房间>/`）；想留档就在确认框里勾「保留磁盘上的共享文件」（API 是 `?keepFiles=1`）。
 
 ### 消息与调度
 
@@ -287,7 +289,7 @@ node server/bin/ah.mjs help        # 完整帮助（也可 npm run cli -- help�
 | `POST /api/register` · `POST /api/login` · `GET /api/me` | 身份 |
 | `GET /api/members` · `GET/PATCH /api/members/:tag` · `GET/POST /api/members/:tag/token` | 成员与 token |
 | `GET /api/adapters` · `GET /api/health` | 适配器可用性与服务状态 |
-| `GET/POST /api/rooms` · `GET/PATCH/DELETE /api/rooms/:room` | 房间（`:room` 可用房间名或 id） |
+| `GET/POST /api/rooms` · `GET/PATCH/DELETE /api/rooms/:room` | 房间（`:room` 可用房间名或 id）。`DELETE` 是**解散房间**：群主可删自己建的，管理员可删任意房间；默认连磁盘文件一起清，`?keepFiles=1` 只删房间与聊天记录 |
 | `POST /api/rooms/join` | 凭邀请码加入群聊（任何已注册用户可调用），大小写/短横线不敏感 |
 | `POST /api/rooms/:room/code/rotate` | 重置邀请码（群主或管理员） |
 | `POST /api/rooms/:room/members` · `DELETE /api/rooms/:room/members/:tag` | 成员进出 |
@@ -367,6 +369,7 @@ agenthub/
 │   ├── capture-screenshots.mjs # 采集 README 截图
 │   ├── prune-test-members.mjs  # 清理自检留下的空号/测试房间（默认只预览）
 │   ├── set-role.mjs            # 改成员角色（管理员提权；默认只预览，--apply 才写库）
+│   ├── prune-orphan-files.mjs  # 清理「房间已删、文件还在磁盘上」的孤儿存档（默认只预览）
 │   ├── restart-when-idle.mjs   # 等没有 AI 在跑时重启服务（让改动安全生效）
 │   ├── check-lan.mjs           # 局域网体检：防火墙 / 网络位置 / 可用地址
 │   ├── fix-lan-access.ps1      # 管理员脚本：放行端口 + 网络改「专用」
@@ -410,6 +413,9 @@ node scripts/prune-test-members.mjs
 node scripts/set-role.mjs                                  # 列出所有人的角色
 node scripts/set-role.mjs --tag <tag> --role admin --apply # 提为管理员
 
+# 清理孤儿存档（早期「删房不清文件」留下的、以及删到一半失败留下的残渣；默认只预览）
+node scripts/prune-orphan-files.mjs --apply
+
 # 重新采集 README 截图（建议对着一个 AH_DATA_DIR 指向临时目录的演示实例跑）
 node scripts/capture-screenshots.mjs --launch --app http://127.0.0.1:8899 --tag <tag> --token <token> --room <房间>
 
@@ -432,7 +438,7 @@ node scripts/db-dump.mjs --runs
 - AI 提示词里会带上群成员列表、最近 30 条消息、共享文件清单，以及文本附件的**内容**。别把不该给某个模型看的东西留在这些地方。
 - CLI 是以启动服务的操作系统用户身份运行的，Codex / Claude Code 这类 CLI 具备读写文件、执行命令的能力。给 AI 成员配置 `workdir` 时请选择合适目录；不确定就跑在 `data/workspaces/<tag>`（默认值）。
 - `input: "arg"` 的适配器会把提示词放进命令行；Windows 下会自动走 PowerShell 包装（提示词放进变量，避免转义与注入），但仍建议优先用 `stdin` / `file` 两种模式。
-- 上传文件保存在 `data/files/<房间>/`，删除房间不会自动删磁盘文件，需要手工清理。
+- 上传文件保存在 `data/files/<房间>/`。解散房间时默认**连磁盘文件一起删**（想留档就走 `?keepFiles=1` / 勾「保留磁盘上的共享文件」）。
 
 ## 常见问题
 

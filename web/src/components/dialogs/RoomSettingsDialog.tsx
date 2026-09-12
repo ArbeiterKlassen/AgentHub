@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Loader2, Save } from 'lucide-react';
+import { Loader2, Save, Trash2 } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 import { useChatStore } from '@/stores/chat';
+import { useSessionStore } from '@/stores/session';
 import { useUiStore } from '@/stores/ui';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -56,11 +57,20 @@ function fromRoom(room: RoomSummary): FormState {
 export function RoomSettingsDialog({ open, onOpenChange, room }: Props) {
   const [form, setForm] = useState<FormState | null>(null);
   const [saving, setSaving] = useState(false);
+  const [confirmDissolve, setConfirmDissolve] = useState(false);
+  const [keepFiles, setKeepFiles] = useState(false);
+  const [dissolving, setDissolving] = useState(false);
   const refreshRoom = useChatStore((s) => s.refreshRoom);
+  const dissolveRoom = useChatStore((s) => s.dissolveRoom);
+  const me = useSessionStore((s) => s.member);
   const pushToast = useUiStore((s) => s.pushToast);
 
   useEffect(() => {
-    if (open && room) setForm(fromRoom(room));
+    if (open && room) {
+      setForm(fromRoom(room));
+      setConfirmDissolve(false);
+      setKeepFiles(false);
+    }
   }, [open, room]);
 
   if (!open || !room || !form) return null;
@@ -90,6 +100,22 @@ export function RoomSettingsDialog({ open, onOpenChange, room }: Props) {
       pushToast(err instanceof Error ? err.message : String(err), 'error');
     } finally {
       setSaving(false);
+    }
+  };
+
+  /** 只有群主与管理员能解散（与后端一致：后端还会再校验一次） */
+  const canDissolve = Boolean(me && (me.role === 'admin' || room.createdBy === me.tag));
+
+  const dissolve = async () => {
+    setDissolving(true);
+    try {
+      const res = await dissolveRoom(room.id, { keepFiles });
+      pushToast(`房间「${res.name}」已解散：${res.hint}`, 'success');
+      onOpenChange(false);
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      setDissolving(false);
     }
   };
 
@@ -167,6 +193,59 @@ export function RoomSettingsDialog({ open, onOpenChange, room }: Props) {
               })}
             </div>
           </div>
+        </div>
+
+        {/* 解散房间：群主可解散自己建的房间，管理员可解散任意房间 */}
+        <div className="mt-4 rounded-lg border border-destructive/40 bg-destructive/5 p-3">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-destructive">
+            <Trash2 className="h-3.5 w-3.5" />
+            解散房间
+          </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+            群主可以解散自己建的房间，管理员可以解散任意房间。解散会一并清除这个房间的
+            <b>成员关系、{room.messageCount} 条聊天记录、AI 运行记录</b>，
+            共享文件区在磁盘上的文件默认也会删掉，<b>不可恢复</b>。
+          </p>
+          {!canDissolve ? (
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              你不是这个房间的创建者（@{room.createdBy ?? '-'}），所以不能解散它。
+            </p>
+          ) : !confirmDissolve ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-2 text-destructive"
+              onClick={() => setConfirmDissolve(true)}
+            >
+              <Trash2 className="mr-1 h-3.5 w-3.5" />
+              解散这个房间…
+            </Button>
+          ) : (
+            <div className="mt-2 space-y-2 rounded border border-destructive/40 bg-background p-2">
+              <label className="flex items-start gap-2 text-[11px]">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-3.5 w-3.5 accent-primary"
+                  checked={keepFiles}
+                  onChange={(e) => setKeepFiles(e.target.checked)}
+                />
+                <span>
+                  保留磁盘上的共享文件（只删房间与聊天记录）
+                  <br />
+                  <span className="text-muted-foreground">勾上后文件会留在 data/files/&lt;房间&gt;/ 里，方便你自己留档。</span>
+                </span>
+              </label>
+              <div className="flex items-center gap-2">
+                <Button variant="destructive" size="sm" disabled={dissolving} onClick={() => void dissolve()}>
+                  {dissolving ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-1 h-3.5 w-3.5" />}
+                  确认解散「{room.name}」
+                </Button>
+                <Button variant="ghost" size="sm" disabled={dissolving} onClick={() => setConfirmDissolve(false)}>
+                  算了
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="mt-4 flex justify-end gap-2">

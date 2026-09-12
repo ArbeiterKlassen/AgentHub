@@ -28,6 +28,10 @@ interface ChatState {
   openRoom: (roomId: string) => Promise<void>;
   createRoom: (input: { name: string; topic?: string; members?: string[] }) => Promise<RoomSummary>;
   joinRoomByCode: (code: string) => Promise<{ room: RoomSummary; alreadyMember: boolean }>;
+  dissolveRoom: (
+    roomId: string,
+    opts?: { keepFiles?: boolean },
+  ) => Promise<{ name: string; hint: string; filesKept: boolean; deleted: Record<string, number> }>;
   refreshRoom: (roomId: string) => Promise<void>;
   send: (text: string, files?: string[], replyTo?: number | null) => Promise<void>;
   searchMessages: (roomId: string, query: string, limit?: number) => Promise<ChatMessage[]>;
@@ -125,6 +129,38 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       files: { ...state.files, [roomId]: detail.files },
       rooms: state.rooms.map((r) => (r.id === roomId ? detail.room : r)),
     }));
+  },
+
+  /**
+   * 解散房间：服务端已经把消息/成员/文件/运行记录清掉，这里把本地缓存一并抹掉，
+   * 并切到剩下的第一个房间（如果解散的正是当前打开的那个）。
+   */
+  dissolveRoom: async (roomId, opts = {}) => {
+    const res = await apiClient.deleteRoom(roomId, opts);
+    const wasActive = get().activeRoomId === roomId;
+    set((state) => {
+      const members = { ...state.members };
+      const messages = { ...state.messages };
+      const files = { ...state.files };
+      const typing = { ...state.typing };
+      delete members[roomId];
+      delete messages[roomId];
+      delete files[roomId];
+      delete typing[roomId];
+      const rooms = state.rooms.filter((r) => r.id !== roomId);
+      return {
+        rooms,
+        members,
+        messages,
+        files,
+        typing,
+        activeRoomId: state.activeRoomId === roomId ? (rooms[0]?.id ?? null) : state.activeRoomId,
+      };
+    });
+    log.action('解散房间', `${res.name}（消息 ${res.deleted?.messages ?? 0} 条 / 文件 ${res.deleted?.diskFiles ?? 0} 个）`);
+    const next = get().activeRoomId;
+    if (wasActive && next) await get().openRoom(next);
+    return { name: res.name, hint: res.hint, filesKept: res.filesKept, deleted: res.deleted };
   },
 
   send: async (text, files = [], replyTo = null) => {
