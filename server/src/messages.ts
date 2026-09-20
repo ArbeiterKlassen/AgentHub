@@ -27,6 +27,8 @@ export interface PostMessageInput {
   chainId?: string | null;
   hop?: number;
   meta?: Record<string, unknown>;
+  /** 结构化载荷（任意 JSON 对象）：给机器读的部分放这儿，别让人从散文里抠数 */
+  data?: Record<string, unknown>;
   /** 已知的成员 tag 集合，用于把 @xxx 收敛成真实成员 */
   knownTags?: Set<string>;
 }
@@ -46,6 +48,7 @@ export function publicMessage(row: MessageRow): Record<string, unknown> {
     chainId: row.chain_id,
     hop: row.hop,
     meta: parseJson<Record<string, unknown>>(row.meta, {}),
+    data: parseJson<Record<string, unknown>>(row.data, {}),
     createdAt: row.created_at,
   };
 }
@@ -67,6 +70,7 @@ export function postMessage(input: PostMessageInput): MessageRow {
   const meta: Record<string, unknown> = { ...(input.meta ?? {}) };
   if (hasAllMention(text)) meta.mentionAll = true;
   const sender = input.sender ?? { tag: 'system', nickname: '系统', kind: 'human' as const };
+  const data = input.data && typeof input.data === 'object' ? input.data : {};
   const row: Omit<MessageRow, 'id'> = {
     room_id: input.roomId,
     sender_tag: sender.tag,
@@ -80,6 +84,7 @@ export function postMessage(input: PostMessageInput): MessageRow {
     chain_id: input.chainId ?? null,
     hop: input.hop ?? 0,
     meta: JSON.stringify(meta),
+    data: JSON.stringify(data),
     created_at: now(),
   };
   const saved = insertMessage(row);

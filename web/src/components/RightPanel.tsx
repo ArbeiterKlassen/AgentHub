@@ -394,6 +394,14 @@ const { members, files, loadingRoom, typing } = useChatStore();
                       <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                     )}
                     <span className="min-w-0 flex-1 truncate text-sm font-medium">{file.name}</span>
+                    {(file.version ?? 1) > 1 && (
+                      <span
+                        className="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground"
+                        title={file.previousId ? `上一版：${file.previousId}` : undefined}
+                      >
+                        v{file.version}
+                      </span>
+                    )}
                     <a
                       href={downloadUrl(server, file.id, token)}
                       className="text-muted-foreground transition-colors hover:text-foreground"
@@ -550,6 +558,11 @@ function AgentCard({
       </div>
       {agent.statusDetail && agent.status === 'error' && (
         <p className="mt-1.5 text-[11px] text-destructive">{agent.statusDetail}</p>
+      )}
+      {agent.presenceNote && (
+        <p className="mt-1.5 truncate text-[11px] text-muted-foreground" title={agent.presenceNote}>
+          💬 {agent.presenceNote}
+        </p>
       )}
       <div className="mt-2 flex items-center gap-1">
         <Badge variant="outline" className="h-5 px-1.5 text-[10px]">

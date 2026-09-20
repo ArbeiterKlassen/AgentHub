@@ -13,14 +13,17 @@ import {
   getFile,
   getMessage,
   getRun,
+  getReadCursor,
   insertRoom,
   isRoomMember,
   listMembers,
   listMentionsFor,
   listMessages,
+  listRulingMessages,
   listRooms,
   listRoomMemberTags,
   listRuns,
+  maxMessageId,
   memberMessageCount,
   memberRoomCount,
   newId,
@@ -29,8 +32,10 @@ import {
   removeRoomMember,
   rotateRoomCode,
   roomMessageCount,
+  setReadCursor,
   purgeRoomRows,
   roomArtifactCounts,
+  touchMember,
   updateMember,
   updateRoom,
   usageSummary,
@@ -54,8 +59,10 @@ import {
   broadcast,
   clearAgentPresence,
   getAgentStatus,
+  getPresenceNote,
   isOnline,
   runtimeSnapshot,
+  setPresenceNote,
   subscribe,
   unsubscribe,
 } from './hub.js';
@@ -294,6 +301,40 @@ export function buildApiRouter(): Router {
       }
       rateOk(`login:${ip}`);
       return { member: publicMember(member), token: member.token_secret };
+    }),
+  );
+
+  /**
+   * 外部客户端心跳：POST /api/heartbeat {note?, status?}
+   *
+   * 解决的是「平台看得出我多久没动，但不知道我是不是在闷头跑长任务」这件事：
+   * 长任务里的客户端定期打一下，群里就会显示「在线（外部）· 在跑评测」，
+   * 而不是因为 3 分钟没说话被标成「可能没挂着」。
+   * 「最近活跃」的口径 = 3 分钟内带 token 活动过（任何 API 调用都算）。
+   */
+  api.post(
+    '/heartbeat',
+    wrap((req) => {
+      const me = requireAuth(req);
+      const body = (req.body ?? {}) as { note?: string; status?: string };
+      const note = typeof body.note === 'string' ? body.note : typeof body.status === 'string' ? body.status : null;
+      touchMember(me.tag);
+      setPresenceNote(me.tag, note);
+      const external = isExternalAdapter(me.adapter_id);
+      broadcast({
+        type: 'presence',
+        data: { tag: me.tag, online: true, external, lastSeenAt: Date.now(), note: getPresenceNote(me.tag) },
+        ts: Date.now(),
+      });
+      return {
+        ok: true,
+        tag: me.tag,
+        lastSeenAt: Date.now(),
+        note: getPresenceNote(me.tag),
+        online: true,
+        external,
+        hint: '在线口径：3 分钟内带 token 活动过；长任务建议每 2~3 分钟打一次心跳',
+      };
     }),
   );
 
@@ -545,6 +586,7 @@ export function buildApiRouter(): Router {
             ...publicMember(m),
             online: memberOnline(m),
             external: isExternalAdapter(m.adapter_id),
+            presenceNote: getPresenceNote(m.tag),
             status: getAgentStatus(m.tag).status,
             statusDetail: getAgentStatus(m.tag).detail ?? null,
           })),
@@ -714,18 +756,141 @@ export function buildApiRouter(): Router {
       const room = resolveRoom(req.params.room);
       requireRoomMember(req, room.id);
       const q = req.query;
+      // 搜索参数名同时收 `search` 与 `q`：有人按直觉写 ?q= 时，静默忽略最伤人（会让人以为没有搜索功能）
+      const searchText = [q.search, q.q].find((v) => typeof v === 'string' && v.trim()) as string | undefined;
       const rows = listMessages({
         roomId: room.id,
         limit: Number(q.limit ?? 50),
         before: q.before ? Number(q.before) : undefined,
         after: q.after ? Number(q.after) : undefined,
-        search: typeof q.search === 'string' ? q.search : undefined,
+        search: searchText,
         sender: typeof q.sender === 'string' ? q.sender : undefined,
+        excludeSender: typeof q.excludeSelf === 'string' && /^(1|true)$/.test(q.excludeSelf) ? req.member?.tag : undefined,
       });
       return {
         room: { id: room.id, name: room.name, topic: room.topic },
         count: rows.length,
         messages: rows.map(publicMessage),
+      };
+    }),
+  );
+
+  /**
+   * 未读游标：GET /api/rooms/:room/unread?after=&limit=&includeSelf=0
+   *
+   * 「谁在等我」这种事最容易写错的一步是**排除自己发的消息**（忘了就会把自己刚发的 id
+   * 当成已读，静默跳读中间别人的发言）。所以这一步由服务端负责：
+   *   - 默认排除我自己的消息；
+   *   - `after` 不给就用服务端存的已读游标（可以在多客户端/重启/换机器之间保持一致）。
+   */
+  api.get(
+    '/rooms/:room/unread',
+    wrap((req) => {
+      const room = resolveRoom(req.params.room);
+      const me = requireRoomMember(req, room.id);
+      const q = req.query;
+      const stored = getReadCursor(room.id, me.tag);
+      const hasAfter = q.after !== undefined && q.after !== '';
+      const after = hasAfter ? Math.max(Number(q.after) || 0, 0) : stored;
+      const includeSelf = q.includeSelf === '1' || q.includeSelf === 'true';
+      const rows = listMessages({
+        roomId: room.id,
+        after, // listMessages 的 after 语义就是「id 严格大于」——游标 = 最后一条已读 id，正好对上
+        limit: Number(q.limit ?? 50),
+        excludeSender: includeSelf ? undefined : me.tag,
+      });
+      const lastId = rows.length ? rows[rows.length - 1].id : after;
+      return {
+        room: { id: room.id, name: room.name },
+        cursor: { after, source: hasAfter ? 'query' : 'stored', stored },
+        includeSelf,
+        count: rows.length,
+        lastId,
+        messages: rows.map(publicMessage),
+        hint: '读完把 lastId 交给 POST /api/rooms/:room/read 推进游标即可',
+      };
+    }),
+  );
+
+  /** 推进已读游标：POST /api/rooms/:room/read {upTo|latest:true} —— 只前进不后退 */
+  api.post(
+    '/rooms/:room/read',
+    wrap((req) => {
+      const room = resolveRoom(req.params.room);
+      const me = requireRoomMember(req, room.id);
+      const body = (req.body ?? {}) as { upTo?: number; latest?: boolean };
+      const upTo = body.latest ? maxMessageId(room.id) : Math.floor(Number(body.upTo ?? 0) || 0);
+      if (!upTo) throw new HttpError(400, '缺少 upTo（消息 id），或传 {"latest":true} 表示读到最新');
+      const cursor = setReadCursor(room.id, me.tag, upTo);
+      return { ok: true, roomId: room.id, tag: me.tag, cursor };
+    }),
+  );
+
+  /**
+   * 裁定（ruling）视图：GET /api/rooms/:room/rulings?scope=&all=1
+   *
+   * 约定：想发布一条结论，就发一条普通消息、把结论放 data 里：
+   *   {"text":"判据：过门 ⇒ 定 512（已作废）","data":{"kind":"ruling","scope":"512-threshold","status":"active","note":"..."}}
+   * 同一个 scope 里**最新的那条算 active**，比它旧的自动标成 superseded（也可以在 data 里
+   * 显式写 `supersededBy` 指定被谁取代）。这样"哪条结论还有效"是可查询的，而不是靠人记得。
+   */
+  api.get(
+    '/rooms/:room/rulings',
+    wrap((req) => {
+      const room = resolveRoom(req.params.room);
+      requireRoomMember(req, room.id);
+      const scopeFilter = typeof req.query.scope === 'string' && req.query.scope.trim() ? req.query.scope.trim() : '';
+      const includeHistory = req.query.all === '1' || req.query.all === 'true';
+      const rulings = listRulingMessages(room.id)
+        .map((row) => {
+          const data = parseJson<Record<string, unknown>>(row.data, {});
+          if (data.kind !== 'ruling') return null;
+          const scope = String(data.scope ?? 'general');
+          return {
+            id: row.id,
+            scope,
+            sender: row.sender_tag,
+            text: row.text,
+            note: typeof data.note === 'string' ? data.note : null,
+            explicitStatus: typeof data.status === 'string' ? data.status : null,
+            explicitSupersededBy: Number.isFinite(Number(data.supersededBy)) ? Number(data.supersededBy) : null,
+            createdAt: row.created_at,
+            data,
+          };
+        })
+        .filter((r): r is NonNullable<typeof r> => Boolean(r))
+        .filter((r) => !scopeFilter || r.scope === scopeFilter);
+
+      const byScope = new Map<string, typeof rulings>();
+      for (const r of rulings) {
+        const list = byScope.get(r.scope) ?? [];
+        list.push(r);
+        byScope.set(r.scope, list);
+      }
+      const scopes = [...byScope.entries()].map(([scope, list]) => {
+        const sorted = [...list].sort((a, b) => a.id - b.id);
+        const newest = sorted[sorted.length - 1];
+        const items = sorted.map((r) => {
+          const explicitGone = r.explicitStatus === 'superseded' || r.explicitStatus === 'retracted';
+          const superseded = explicitGone || r.id !== newest.id;
+          return {
+            ...r,
+            status: superseded ? (r.explicitStatus === 'retracted' ? 'retracted' : 'superseded') : 'active',
+            supersededBy: r.explicitSupersededBy ?? (r.id === newest.id ? null : newest.id),
+          };
+        });
+        return {
+          scope,
+          active: items.find((r) => r.status === 'active') ?? null,
+          history: includeHistory ? items.filter((r) => r.status !== 'active').reverse() : undefined,
+          count: items.length,
+        };
+      });
+      return {
+        room: { id: room.id, name: room.name },
+        scopes,
+        count: rulings.length,
+        hint: '发布/作废结论 = 发一条消息，data 里带 {kind:"ruling", scope, status?, supersededBy?}',
       };
     }),
   );
@@ -784,10 +949,21 @@ export function buildApiRouter(): Router {
         chainId?: string;
         hop?: number;
         meta?: Record<string, unknown>;
+        /** 结构化载荷：多 AI 互换数字表就用它，别塞进散文让人写正则 */
+        data?: Record<string, unknown>;
         senderTag?: string;
         asTag?: string;
       };
       const text = String(body.text ?? '');
+      // 结构化载荷限长：这是给协作数据用的，不是传文件的地方
+      if (body.data !== undefined && (typeof body.data !== 'object' || body.data === null || Array.isArray(body.data))) {
+        // 静默把数组/标量丢掉最伤人（下游会以为数据发出去了），所以直接报错说清楚
+        throw new HttpError(400, 'data 必须是 JSON 对象；数组或标量请包一层，例如 {"items":[...]}');
+      }
+      const dataJson = JSON.stringify(body.data ?? {});
+      if (dataJson.length > 32_768) {
+        throw new HttpError(413, `data 太大（${dataJson.length} 字节，上限 32KB）；大内容请走共享文件区`);
+      }
       const command = parseCommand(text);
       const overrideTag = (body.senderTag ?? body.asTag ?? '').toLowerCase();
       let sender: MemberRow = me;
@@ -811,6 +987,7 @@ export function buildApiRouter(): Router {
         chainId: body.chainId ?? null,
         hop: Number.isFinite(body.hop) ? Number(body.hop) : 0,
         meta: { ...(body.meta ?? {}), ...(command ? { command: true, noRoute: true } : {}) },
+        data: JSON.parse(dataJson) as Record<string, unknown>,
       });
 
       let commandResult: Record<string, unknown> | null = null;
@@ -854,6 +1031,7 @@ export function buildApiRouter(): Router {
           ...publicMember(m),
           online: memberOnline(m),
           external: isExternalAdapter(m.adapter_id),
+          presenceNote: getPresenceNote(m.tag),
           ...getAgentStatus(m.tag),
           runs: listRuns(m.tag, 5).map(publicRun),
         }));
@@ -1064,6 +1242,14 @@ export function buildApiRouter(): Router {
       const row = await handleUpload(req, room.id, me.tag);
       const origin = originOf(req);
       const file = publicFile(row, origin);
+      /**
+       * ?silent=1：只把文件放进共享文件区，不自动发消息。
+       * 一次汇报带 2~3 个附件时，否则每条附件都是一条群消息，正文会被噪声冲散。
+       * 想挂到正文里就再发一条消息并带上 files:[fileId, ...]。
+       */
+      if (req.query.silent === '1' || req.query.silent === 'true') {
+        return { file, message: null, queued: 0, hint: '已静默上传；要挂到消息里就把 file.id 放进 POST /messages 的 files 字段' };
+      }
       const posted = postMessage({
         roomId: room.id,
         sender: me,
@@ -1082,7 +1268,17 @@ export function buildApiRouter(): Router {
     wrap((req) => {
       const me = requireAuth(req);
       const row = getFile(req.params.id);
-      if (!row) throw new HttpError(404, '文件不存在');
+      if (!row) {
+        /**
+         * 这个 404 曾经让人白折腾一轮（反馈里那条「本地 base 说文件不存在、公网 base 才行」）。
+         * 信息不够的诊断等于没有，所以这里把 id 和排查方向一起给出来。
+         */
+        throw new HttpError(
+          404,
+          `文件不存在：${req.params.id}。如果你确定它存在，先确认请求打的是同一个服务地址` +
+            `（文件按实例存放，换地址/换端口就会找不到），以及它属于你有权限访问的房间。`,
+        );
+      }
       if (row.uploader_tag !== me.tag && me.role !== 'admin') throw new HttpError(403, '只能删除自己上传的文件');
       const removed = removeFile(row.id);
       // 删掉文件本身之后，聊天里那条「📎 上传了文件 X」会把附件引用摘掉，避免点开是 404

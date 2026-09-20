@@ -8,6 +8,7 @@ import {
   getFile,
   insertFile,
   listFiles,
+  latestFileByName,
   newId,
   now,
   type FileRow,
@@ -33,8 +34,34 @@ const MIME_GUESS: Record<string, string> = {
   '.log': 'text/plain',
 };
 
+/**
+ * 「UTF-8 字节被按 latin-1 解」的还原。
+ * HTTP 头按规范是 latin-1，客户端要是直接把中文塞进头里（curl / python requests 都会这么干），
+ * 到服务端就变成「ä¸‰å¸¦」这类乱码 —— 这里按字节还原回去。
+ * 只有当还原结果确实是一串合法 UTF-8 时才采用，避免误伤真正的 latin-1 文件名。
+ */
+function recoverLatin1Utf8(input: string): string {
+  if (!/[\u0080-\u00ff]/.test(input)) return input;
+  const decoded = Buffer.from(input, 'latin1').toString('utf8');
+  return decoded.includes('\ufffd') ? input : decoded;
+}
+
+/**
+ * 文件名清洗。要同时容忍三种客户端行为，否则中文名要么变乱码、要么把请求打成 500：
+ *   1) 按文档做了 URL 编码（`%E4%B8%89...`）→ 解开
+ *   2) 直接把 UTF-8 中文塞进 `X-File-Name` 头 → 按 latin-1 还原
+ *   3) 名字里带裸 `%`（例如 `100%.log`）→ `decodeURIComponent` 会抛 URIError，以前直接 500
+ */
 export function safeName(raw: string): string {
-  const base = path.basename(decodeURIComponent(raw || 'file')).replace(/[\\/:*?"<>|]/g, '_');
+  const input = String(raw ?? '').trim() || 'file';
+  let name = input;
+  try {
+    name = decodeURIComponent(input);
+  } catch {
+    name = input; // 含裸 % 的名字：按原文用
+  }
+  name = recoverLatin1Utf8(name);
+  const base = path.basename(name).replace(/[\\/:*?"<>|]/g, '_');
   const trimmed = base.replace(/^\.+/, '').slice(0, 120);
   return trimmed || 'file';
 }
@@ -48,6 +75,8 @@ export function publicFile(row: FileRow, origin = ''): Record<string, unknown> {
     mime: row.mime,
     uploaderTag: row.uploader_tag,
     sha256: row.sha256,
+    version: row.version ?? 1,
+    previousId: row.previous_id ?? null,
     createdAt: row.created_at,
     url: `${origin}/api/files/${row.id}`,
     downloadUrl: `${origin}/api/files/${row.id}?download=1`,
@@ -111,6 +140,11 @@ export async function handleUpload(req: Request, roomId: string, uploaderTag: st
     MIME_GUESS[path.extname(name).toLowerCase()] ||
     'application/octet-stream';
 
+  /**
+   * 同名文件的版本链：反复上传同一个文件名（例如每次评测都叫 `d1rv7_ep50_eval.log`）
+   * 以前事后无从区分哪份是哪份，现在自动编号并指向上一条。
+   */
+  const previous = latestFileByName(roomId, name);
   const row: FileRow = {
     id,
     room_id: roomId,
@@ -120,6 +154,8 @@ export async function handleUpload(req: Request, roomId: string, uploaderTag: st
     uploader_tag: uploaderTag,
     sha256: hash.digest('hex'),
     stored_path: stored,
+    version: previous ? previous.version + 1 : 1,
+    previous_id: previous?.id ?? null,
     created_at: now(),
   };
   insertFile(row);

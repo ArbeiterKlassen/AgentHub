@@ -47,6 +47,12 @@ export interface MessageRow {
   ;
   hop: number;
   meta: string;
+  /**
+   * 结构化载荷（任意 JSON 对象，给人看的话仍写在 text 里）。
+   * 存在的理由：多个 AI 互换数字表时，不该逼着双方写正则从散文里捞数——
+   * 捞错不会报错，只会静默得出错误结论。meta 是平台自己用的保留字段，别混用。
+   */
+  data: string;
   created_at: number;
 }
 
@@ -59,6 +65,9 @@ export interface FileRow {
   uploader_tag: string;
   sha256: string;
   stored_path: string;
+  /** 同名文件的第几版（同一房间内按 name 计数），配上 previous_id 就能看出"这份替换了哪份" */
+  version: number;
+  previous_id: string | null;
   created_at: number;
 }
 
@@ -134,6 +143,8 @@ function migrate(d: DatabaseSync): void {
       tag       TEXT NOT NULL,
       role      TEXT NOT NULL DEFAULT 'member',
       joined_at INTEGER NOT NULL,
+      -- 每人在每个房间的「读到哪了」：给未读游标用（外部客户端最容易写错的就是这一步）
+      last_read_id INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (room_id, tag)
     );
 
@@ -151,6 +162,7 @@ function migrate(d: DatabaseSync): void {
       chain_id        TEXT,
       hop             INTEGER NOT NULL DEFAULT 0,
       meta            TEXT NOT NULL DEFAULT '{}',
+      data            TEXT NOT NULL DEFAULT '{}',
       created_at      INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_messages_room ON messages (room_id, id);
@@ -164,6 +176,8 @@ function migrate(d: DatabaseSync): void {
       uploader_tag TEXT NOT NULL,
       sha256       TEXT NOT NULL DEFAULT '',
       stored_path  TEXT NOT NULL,
+      version      INTEGER NOT NULL DEFAULT 1,
+      previous_id  TEXT,
       created_at   INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_files_room ON files (room_id, created_at);
@@ -205,6 +219,25 @@ function migrate(d: DatabaseSync): void {
     if (!runCols.some((c) => c.name === col)) d.exec(`ALTER TABLE agent_runs ADD COLUMN ${col} INTEGER`);
   }
   if (!runCols.some((c) => c.name === 'cost_usd')) d.exec('ALTER TABLE agent_runs ADD COLUMN cost_usd REAL');
+
+  // 老库补「已读游标」列
+  const memberCols = d.prepare('PRAGMA table_info(room_members)').all() as unknown as Array<{ name: string }>;
+  if (!memberCols.some((c) => c.name === 'last_read_id')) {
+    d.exec('ALTER TABLE room_members ADD COLUMN last_read_id INTEGER NOT NULL DEFAULT 0');
+  }
+
+  // 老库补「结构化载荷」列（消息）与「同名版本」列（文件）
+  const msgCols = d.prepare('PRAGMA table_info(messages)').all() as unknown as Array<{ name: string }>;
+  if (!msgCols.some((c) => c.name === 'data')) {
+    d.exec("ALTER TABLE messages ADD COLUMN data TEXT NOT NULL DEFAULT '{}'");
+  }
+  const fileCols = d.prepare('PRAGMA table_info(files)').all() as unknown as Array<{ name: string }>;
+  if (!fileCols.some((c) => c.name === 'version')) {
+    d.exec('ALTER TABLE files ADD COLUMN version INTEGER NOT NULL DEFAULT 1');
+  }
+  if (!fileCols.some((c) => c.name === 'previous_id')) {
+    d.exec('ALTER TABLE files ADD COLUMN previous_id TEXT');
+  }
 }
 
 /** 邀请码字符集：去掉 0/O/1/I 这些看起来像的，方便手输 */
@@ -448,6 +481,45 @@ export function listRoomMemberTags(roomId: string): string[] {
   return rows.map((r) => r.tag);
 }
 
+/* --------------------------- 未读游标（已读位置） --------------------------- */
+
+/** 某人某房间「读到哪了」。没人标过就是 0（= 从第一条开始都算未读）。 */
+export function getReadCursor(roomId: string, tag: string): number {
+  const row = getDb()
+    .prepare('SELECT last_read_id FROM room_members WHERE room_id = ? AND tag = ?')
+    .get(roomId, tag) as { last_read_id: number | null } | undefined;
+  return Number(row?.last_read_id ?? 0) || 0;
+}
+
+/** 推进已读游标（只前进、不后退，避免并发把游标拉回去） */
+export function setReadCursor(roomId: string, tag: string, upTo: number): number {
+  const next = Math.max(getReadCursor(roomId, tag), Math.floor(Number(upTo) || 0));
+  getDb()
+    .prepare('UPDATE room_members SET last_read_id = ? WHERE room_id = ? AND tag = ?')
+    .run(next, roomId, tag);
+  return next;
+}
+
+export function maxMessageId(roomId: string): number {
+  const row = getDb().prepare('SELECT MAX(id) AS n FROM messages WHERE room_id = ?').get(roomId) as
+    | { n: number | null }
+    | undefined;
+  return Number(row?.n ?? 0) || 0;
+}
+
+/**
+ * 房间里的「裁定」（ruling）：带 data.kind='ruling' 的消息。
+ *
+ * 存在理由（反馈里那条最贵的事故）：一条结论被证伪、在别处改过了，
+ * 但某个脚本/文案里还印着旧结论，没人回来追。数算错会被自检抓住，**文案过期不会**。
+ * 所以让"哪条结论还有效"变成可查询的：同一 scope 里最新的那条算 active，其余自动 superseded。
+ */
+export function listRulingMessages(roomId: string): MessageRow[] {
+  return getDb()
+    .prepare("SELECT * FROM messages WHERE room_id = ? AND data LIKE '%\"kind\"%' ORDER BY id ASC")
+    .all(roomId) as unknown as MessageRow[];
+}
+
 /* ------------------------------ messages ------------------------------- */
 
 export function insertMessage(row: Omit<MessageRow, 'id'>): MessageRow {
@@ -455,8 +527,8 @@ export function insertMessage(row: Omit<MessageRow, 'id'>): MessageRow {
     .prepare(
       `INSERT INTO messages
         (room_id, sender_tag, sender_nickname, sender_kind, type, text, mentions, files,
-         reply_to, chain_id, hop, meta, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         reply_to, chain_id, hop, meta, data, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .run(
       row.room_id,
@@ -471,6 +543,7 @@ export function insertMessage(row: Omit<MessageRow, 'id'>): MessageRow {
       row.chain_id,
       row.hop,
       row.meta,
+      row.data,
       row.created_at,
     );
   const id = Number(res.lastInsertRowid);
@@ -582,6 +655,8 @@ export interface HistoryQuery {
   after?: number;
   search?: string;
   sender?: string;
+  /** 排除某个人自己发的消息（未读游标用：别人的发言才是「未读」） */
+  excludeSender?: string;
 }
 
 export function listMessages(q: HistoryQuery): MessageRow[] {
@@ -599,6 +674,10 @@ export function listMessages(q: HistoryQuery): MessageRow[] {
   if (q.sender) {
     where += ' AND sender_tag = ?';
     params.push(q.sender);
+  }
+  if (q.excludeSender) {
+    where += ' AND sender_tag != ?';
+    params.push(q.excludeSender);
   }
   if (q.search) {
     where += ' AND text LIKE ?';
@@ -629,8 +708,9 @@ export function roomMessageCount(roomId: string): number {
 export function insertFile(row: FileRow): void {
   getDb()
     .prepare(
-      `INSERT INTO files (id, room_id, name, size, mime, uploader_tag, sha256, stored_path, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO files (id, room_id, name, size, mime, uploader_tag, sha256, stored_path,
+                          version, previous_id, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .run(
       row.id,
@@ -641,8 +721,17 @@ export function insertFile(row: FileRow): void {
       row.uploader_tag,
       row.sha256,
       row.stored_path,
+      row.version,
+      row.previous_id,
       row.created_at,
     );
+}
+
+/** 同一房间内同名的上一版（用来做版本链） */
+export function latestFileByName(roomId: string, name: string): FileRow | undefined {
+  return getDb()
+    .prepare('SELECT * FROM files WHERE room_id = ? AND name = ? ORDER BY created_at DESC LIMIT 1')
+    .get(roomId, name) as FileRow | undefined;
 }
 
 export function getFile(id: string): FileRow | undefined {

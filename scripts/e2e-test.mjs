@@ -582,6 +582,126 @@ async function run() {
     (inboxAll.data.items ?? []).some((i) => i.message.id === asked.data.message.id && i.answered === true),
   );
 
+  /* 19c. 未读游标（服务端排除自己）/ 结构化 data / 裁定 / 静默上传 / 心跳 */
+  const peerTag = `claude-${suffix}`; // 房间里已有的另一个 AI 成员，用来扮演"别人"
+  const peerToken = tokens[peerTag];
+  const cursorProbe = await api(`/api/rooms/${ROOM}/messages`, {
+    method: 'POST',
+    token: tokens[alice],
+    body: { text: '未读游标测试：这条是我自己发的' },
+  });
+  const otherMsg = await api(`/api/rooms/${ROOM}/messages`, {
+    method: 'POST',
+    token: peerToken,
+    body: { text: '未读游标测试：这条是别人发的' },
+  });
+  const unread = await api(`/api/rooms/${ROOM}/unread?after=${cursorProbe.data.message.id - 1}&limit=50`, {
+    token: tokens[alice],
+  });
+  const unreadIds = (unread.data.messages ?? []).map((m) => m.id);
+  check(
+    '未读游标：只给别人的发言，排除自己',
+    !unreadIds.includes(cursorProbe.data.message.id) && unreadIds.includes(otherMsg.data.message.id),
+    `${unreadIds.length} 条`,
+  );
+  const readAhead = await api(`/api/rooms/${ROOM}/read`, {
+    method: 'POST',
+    token: tokens[alice],
+    body: { upTo: otherMsg.data.message.id },
+  });
+  const readBack = await api(`/api/rooms/${ROOM}/read`, {
+    method: 'POST',
+    token: tokens[alice],
+    body: { upTo: 1 },
+  });
+  check(
+    '已读游标只前进不后退',
+    readAhead.data.cursor === otherMsg.data.message.id && readBack.data.cursor === readAhead.data.cursor,
+    `${readAhead.data.cursor} → ${readBack.data.cursor}`,
+  );
+
+  const withData = await api(`/api/rooms/${ROOM}/messages`, {
+    method: 'POST',
+    token: tokens[alice],
+    body: { text: 'v7 对 v6 的对照（数字在 data 里）', data: { metric: 'mIoU', v7: 2.13, v6: 0.662 } },
+  });
+  check(
+    '结构化 data 能存能读',
+    withData.ok && withData.data.message.data?.v7 === 2.13 && withData.data.message.data?.metric === 'mIoU',
+    JSON.stringify(withData.data.message.data),
+  );
+  const dataArray = await api(`/api/rooms/${ROOM}/messages`, {
+    method: 'POST',
+    token: tokens[alice],
+    body: { text: '数组 data', data: [1, 2, 3] },
+  });
+  check('data 传数组被明确拒绝（400）', dataArray.status === 400, `status=${dataArray.status}`);
+
+  const ruling1 = await api(`/api/rooms/${ROOM}/messages`, {
+    method: 'POST',
+    token: tokens[alice],
+    body: { text: '裁定 v1：过门 ⇒ 定 512', data: { kind: 'ruling', scope: `e2e-${RUN}` } },
+  });
+  const ruling2 = await api(`/api/rooms/${ROOM}/messages`, {
+    method: 'POST',
+    token: peerToken,
+    body: { text: '裁定 v2：改成 384', data: { kind: 'ruling', scope: `e2e-${RUN}` } },
+  });
+  const rulings = await api(`/api/rooms/${ROOM}/rulings?scope=e2e-${RUN}&all=1`, { token: tokens[alice] });
+  const rulingScope = rulings.data.scopes?.[0];
+  check(
+    '裁定：同 scope 最新的生效、旧的自动作废',
+    rulingScope?.active?.id === ruling2.data.message.id &&
+      rulingScope?.history?.[0]?.id === ruling1.data.message.id &&
+      rulingScope?.history?.[0]?.supersededBy === ruling2.data.message.id,
+    `active=#${rulingScope?.active?.id} 旧=#${rulingScope?.history?.[0]?.id}`,
+  );
+
+  const searchAsQ = await api(`/api/rooms/${ROOM}/messages?q=${encodeURIComponent('未读游标测试')}`, { token: tokens[alice] });
+  check('搜索参数 q 与 search 等价（以前写 q 会被静默忽略）', searchAsQ.data.count >= 2, `命中 ${searchAsQ.data.count} 条`);
+
+  const silent = await api(`/api/rooms/${ROOM}/files?silent=1`, {
+    method: 'POST',
+    token: tokens[alice],
+    raw: true,
+    body: new Uint8Array(Buffer.from('silent')),
+    headers: { 'Content-Type': 'text/plain', 'X-File-Name': encodeURIComponent('静默附件.txt') },
+  });
+  check('静默上传：只进文件区、不产生消息', silent.ok && silent.data.message === null && silent.data.file?.name === '静默附件.txt');
+  const secondSame = await api(`/api/rooms/${ROOM}/files?silent=1`, {
+    method: 'POST',
+    token: tokens[alice],
+    raw: true,
+    body: new Uint8Array(Buffer.from('silent2')),
+    headers: { 'Content-Type': 'text/plain', 'X-File-Name': encodeURIComponent('静默附件.txt') },
+  });
+  check(
+    '同名文件自动编号并指向前一版',
+    secondSame.data.file?.version === 2 && secondSame.data.file?.previousId === silent.data.file?.id,
+    `v${secondSame.data.file?.version} ← ${secondSame.data.file?.previousId}`,
+  );
+  const oddName = await api(`/api/rooms/${ROOM}/files?silent=1`, {
+    method: 'POST',
+    token: tokens[alice],
+    raw: true,
+    body: new Uint8Array(Buffer.from('pct')),
+    headers: { 'Content-Type': 'text/plain', 'X-File-Name': '100%.log' },
+  });
+  check('文件名带裸 % 不再 500', oddName.ok && oddName.data.file?.name === '100%.log', `status=${oddName.status}`);
+
+  const beat = await api('/api/heartbeat', {
+    method: 'POST',
+    token: peerToken,
+    body: { note: '在跑评测，预计 20 分钟' },
+  });
+  const roomWithNote = await api(`/api/rooms/${ROOM}`, { token: tokens[alice] });
+  const notedMember = (roomWithNote.data.members ?? []).find((m) => m.tag === peerTag);
+  check(
+    '心跳能报状态备注，并在成员列表里显示',
+    beat.ok && notedMember?.presenceNote === '在跑评测，预计 20 分钟',
+    String(notedMember?.presenceNote),
+  );
+
   /* 20. 解散房间：群主可删自己建的、管理员可删任意，并且磁盘文件一并清掉 */
   const strangerTag = `stranger-${suffix}`;
   await register(strangerTag, '路人');

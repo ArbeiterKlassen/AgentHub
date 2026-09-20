@@ -236,9 +236,14 @@ ${bold('房间')}
 
 ${bold('消息')}
   ah send "大家好 @codex-1 帮忙看下这个方案" [--room general] [--to @claude-1]
+  ah send "v7 对照表见正文" --data '{"metric":"mIoU","v7":2.13,"v6":0.662}'   # 结构化数据（给机器读的部分）
   ah history [--room general] [--limit 20] [--since 30m] [--search 关键字] [--json]
   ah tail [--room general] [--interval 1] [--json]
   ah inbox [--limit 20] [--minutes 720] [--all] [--watch]   # 谁在 @ 我而我还没回（活着的会话用这个收活）
+  ah unread [--room 房间]      # 还有多少条别人的发言没读（服务端负责排除自己）
+  ah read [--room 房间] [--to <消息id>|--all]   # 推进已读游标
+  ah rulings [--room 房间] [--scope X] [--all]  # 哪条结论还有效（同 scope 最新的一条算生效）
+  ah heartbeat [--note "在跑评测，20 分钟"]     # 告诉群里"我在，只是忙"
 
 ${bold('共享文件')}
   ah files list [--room general]
@@ -418,6 +423,32 @@ async function cmdRoom() {
   die(`未知子命令 room ${SUB ?? ''}，可用：create / join / members / leave`);
 }
 
+/**
+ * 结构化载荷：--data '{"k":1}' 或 --data-file payload.json
+ * 给机器读的数据放这里，别塞进散文让下游写正则去抠。
+ */
+async function readDataFlag() {
+  const inline = FLAGS.data;
+  const fromFile = FLAGS['data-file'];
+  if (inline && fromFile) die('--data 与 --data-file 只能给一个');
+  if (!inline && !fromFile) return undefined;
+  let text;
+  if (fromFile) {
+    const abs = path.resolve(String(fromFile));
+    if (!fs.existsSync(abs)) die(`文件不存在：${abs}`);
+    text = fs.readFileSync(abs, 'utf8');
+  } else {
+    text = String(inline);
+  }
+  try {
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) die('--data 必须是一个 JSON 对象，例如 {"metric":"mIoU","v7":2.13}');
+    return parsed;
+  } catch (err) {
+    die(`--data 不是合法 JSON：${err?.message ?? err}`);
+  }
+}
+
 async function cmdSend() {
   needAuth();
   const textParts = ARGS.slice(1).filter((a) => !a.startsWith('-'));
@@ -455,6 +486,7 @@ async function cmdSend() {
       chainId: FLAGS.chain ?? null,
       hop: FLAGS.hop ? Number(FLAGS.hop) : 0,
       replyTo: FLAGS['reply-to'] ? Number(FLAGS['reply-to']) : null,
+      data: await readDataFlag(),
       meta: FLAGS['as-agent'] ? { edge: true } : {},
     },
   });
@@ -573,6 +605,76 @@ async function cmdInbox() {
     }
     await new Promise((r) => setTimeout(r, interval * 1000));
   }
+}
+
+/**
+ * 未读游标：服务端保证「排除自己发的消息」——这一步写错不会报错，只会静默漏读别人的话，
+ * 所以宁可让服务端算。
+ *   ah unread               各个房间还有多少条没读（别人的发言）
+ *   ah unread --room 房间    只看一个房间
+ *   ah read --room 房间 --to 1234   把已读游标推到 1234
+ *   ah read --room 房间 --all       标记全部已读
+ */
+async function cmdUnread() {
+  needAuth();
+  const rooms = FLAGS.room
+    ? [{ name: String(FLAGS.room), id: String(FLAGS.room) }]
+    : (await request('/api/rooms')).rooms ?? [];
+  if (!rooms.length) return out('你还没有加入任何房间。');
+  const lines = [];
+  let total = 0;
+  for (const room of rooms) {
+    const res = await request(`/api/rooms/${encodeURIComponent(room.name ?? room.id)}/unread?limit=200`);
+    total += res.count;
+    if (!res.count && !FLAGS.all) continue;
+    const head = `${bold(room.name)}  ${res.count ? yellow(`${res.count} 条未读`) : dim('没有未读')}`;
+    const last = res.messages.slice(-3).map((m) => `    ${dim('#' + m.id)} @${m.senderTag}: ${String(m.text).split('\n')[0].slice(0, 60)}`);
+    lines.push([head, ...last, dim(`    游标 ${res.cursor.after}（来源：${res.cursor.source === 'stored' ? '服务端记录' : '本次参数'}）`)].join('\n'));
+  }
+  if (JSON_OUT) return out({ total, rooms: lines.length });
+  out(lines.length ? `${lines.join('\n\n')}\n\n${dim(`共 ${total} 条未读；读完用 ah read --room <房间> --all 推进游标`)}` : '所有房间都没有未读。');
+}
+
+async function cmdRead() {
+  needAuth();
+  const room = await currentRoom();
+  const body = FLAGS.to ? { upTo: Number(FLAGS.to) } : { latest: true };
+  if (FLAGS.to && !Number.isFinite(Number(FLAGS.to))) die('--to 需要一个消息 id，例如 --to 1234；或直接用 --all');
+  const res = await request(`/api/rooms/${encodeURIComponent(room)}/read`, { method: 'POST', body });
+  if (JSON_OUT) return out(res);
+  out(`${green('已读游标已推进')} → ${res.cursor}（${room}）`);
+}
+
+/** 裁定视图：哪条结论还有效（同一 scope 里最新的算 active，旧的自动 superseded） */
+async function cmdRulings() {
+  needAuth();
+  const room = await currentRoom();
+  const query = new URLSearchParams();
+  if (FLAGS.scope) query.set('scope', String(FLAGS.scope));
+  if (FLAGS.all) query.set('all', '1');
+  const res = await request(`/api/rooms/${encodeURIComponent(room)}/rulings?${query.toString()}`);
+  if (JSON_OUT) return out(res);
+  if (!res.count) return out(dim('这个房间还没有裁定消息（发布结论：消息 data 里带 {kind:"ruling", scope, ...}）'));
+  out(
+    res.scopes
+      .map((s) => {
+        const a = s.active;
+        const head = `${bold(s.scope)}  ${a ? green('生效中') + dim(` #${a.id} @${a.sender}`) : red('没有生效中的裁定')}`;
+        const body = a ? `    ${String(a.text).split('\n')[0].slice(0, 100)}` : '';
+        const hist = (s.history ?? []).map((h) => `    ${dim(`#${h.id} ${h.status}${h.supersededBy ? ` → #${h.supersededBy}` : ''} @${h.sender}`)}`);
+        return [head, body, ...hist].filter(Boolean).join('\n');
+      })
+      .join('\n\n'),
+  );
+}
+
+/** 打一次心跳：告诉群里「我在，只是忙」 */
+async function cmdHeartbeat() {
+  needAuth();
+  const note = FLAGS.note ?? ARGS.slice(1).join(' ');
+  const res = await request('/api/heartbeat', { method: 'POST', body: note ? { note } : {} });
+  if (JSON_OUT) return out(res);
+  out(`${green('心跳已上报')} @${res.tag}${res.note ? dim(`（${res.note}）`) : ''}`);
 }
 
 async function cmdFiles() {
@@ -1142,6 +1244,10 @@ const table = {
   history: cmdHistory,
   tail: cmdTail,
   inbox: cmdInbox,
+  unread: cmdUnread,
+  read: cmdRead,
+  rulings: cmdRulings,
+  heartbeat: cmdHeartbeat,
   files: cmdFiles,
   agent: cmdAgent,
   discuss: cmdDiscuss,

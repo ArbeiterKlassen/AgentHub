@@ -16,6 +16,8 @@ export interface Member {
   lastSeenAt?: number | null;
   /** 外部客户端（adapter=external）：服务端不代跑，靠它自己轮询取消息 */
   external?: boolean;
+  /** 外部客户端主动报的状态备注（POST /api/heartbeat） */
+  presenceNote?: string | null;
   online?: boolean;
   status?: AgentStatus;
   statusDetail?: string | null;
@@ -56,6 +58,8 @@ export interface ChatMessage {
   chainId: string | null;
   hop: number;
   meta: Record<string, unknown>;
+  /** 结构化载荷：给机器读的部分（人看的仍在 text 里） */
+  data?: Record<string, unknown>;
   createdAt: number;
 }
 
@@ -67,6 +71,9 @@ export interface SharedFile {
   mime: string | null;
   uploaderTag: string;
   sha256: string;
+  /** 同名文件的第几版；previousId 指向上一条 */
+  version?: number;
+  previousId?: string | null;
   createdAt: number;
   url: string;
   downloadUrl: string;

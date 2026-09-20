@@ -144,6 +144,13 @@ export function openapiSpec(): Record<string, unknown> {
               type: 'object',
               description: '附加信息，例如 mentionAll / lateReply（回复较早消息）/ noRoute（不触发 AI）',
             },
+            data: {
+              type: 'object',
+              description:
+                '结构化载荷（任意 JSON 对象，上限 32KB）。给机器读的部分放这里，别让人从散文里抠数字：\n' +
+                '例如 `{"metric":"mean(pred-empty)","v7_ep50":2.13,"v6_ep50":0.662}`。\n' +
+                '约定：`{"kind":"ruling","scope":"...","status":"active|superseded|retracted"}` 表示一条「裁定」，见 /rulings。',
+            },
             createdAt: { type: 'integer' },
           },
           required: ['id', 'roomId', 'senderTag', 'text', 'createdAt'],
@@ -158,6 +165,8 @@ export function openapiSpec(): Record<string, unknown> {
             mime: { type: ['string', 'null'] },
             uploaderTag: { type: 'string' },
             sha256: { type: 'string' },
+            version: { type: 'integer', description: '同名文件的第几版（同一房间内按文件名计数）' },
+            previousId: { type: ['string', 'null'], description: '上一版文件 id' },
             createdAt: { type: 'integer' },
             url: { type: 'string' },
             downloadUrl: { type: 'string' },
@@ -495,6 +504,7 @@ export function openapiSpec(): Record<string, unknown> {
             { name: 'before', in: 'query', schema: { type: 'integer' }, description: '取比这个 id 更早的消息' },
             { name: 'after', in: 'query', schema: { type: 'integer' }, description: '取比这个 id 更新的消息（外部 AI 轮询用这个）' },
             { name: 'search', in: 'query', schema: { type: 'string' }, description: '按正文内容模糊匹配' },
+            { name: 'q', in: 'query', schema: { type: 'string' }, description: '`search` 的别名（两个都写时以 search 为准）' },
             { name: 'sender', in: 'query', schema: { type: 'string' }, description: '只看某个 tag 发的' },
             tokenParam(),
           ],
@@ -526,6 +536,10 @@ export function openapiSpec(): Record<string, unknown> {
               chainId: { type: ['string', 'null'] },
               hop: { type: 'integer' },
               meta: { type: 'object' },
+              data: {
+                type: 'object',
+                description: '结构化载荷（JSON 对象，上限 32KB）；数组要包一层，例如 {"items":[...]}',
+              },
             },
             required: ['text'],
           }),
@@ -550,6 +564,126 @@ export function openapiSpec(): Record<string, unknown> {
             { name: 'id', in: 'path', required: true, schema: { type: 'integer' } },
           ],
           responses: { 200: jsonResponse({ type: 'object', properties: { ok: { type: 'boolean' } } }), ...errorResponses() },
+        },
+      },
+      '/api/rooms/{room}/unread': {
+        get: {
+          tags: ['消息'],
+          summary: '未读消息（服务端负责排除你自己发的）',
+          description:
+            '给外部客户端用的「谁在等我」：返回游标之后的消息，**默认排除我自己发的**。\n' +
+            '排除自己这一步最容易写错、且错了不报错（会静默跳读中间别人的发言），所以由服务端保证。\n' +
+            '不给 `after` 就用服务端保存的已读游标（多客户端/重启/换机器都不会漂移）。',
+          parameters: [
+            roomParam(),
+            { name: 'after', in: 'query', schema: { type: 'integer' }, description: '从这条之后算；不给则用服务端存的游标' },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 50, maximum: 500 } },
+            { name: 'includeSelf', in: 'query', schema: { type: 'string', enum: ['1'] }, description: '连自己发的也返回（默认不返回）' },
+          ],
+          responses: {
+            200: jsonResponse({
+              type: 'object',
+              properties: {
+                room: { type: 'object' },
+                cursor: {
+                  type: 'object',
+                  properties: {
+                    after: { type: 'integer' },
+                    source: { type: 'string', enum: ['query', 'stored'] },
+                    stored: { type: 'integer' },
+                  },
+                },
+                count: { type: 'integer' },
+                lastId: { type: 'integer' },
+                messages: { type: 'array', items: ref('Message') },
+              },
+            }),
+            ...errorResponses(),
+          },
+        },
+      },
+      '/api/rooms/{room}/read': {
+        post: {
+          tags: ['消息'],
+          summary: '推进已读游标（只前进、不后退）',
+          parameters: [roomParam()],
+          requestBody: jsonBody({
+            type: 'object',
+            properties: {
+              upTo: { type: 'integer', description: '读到哪个消息 id' },
+              latest: { type: 'boolean', description: 'true = 直接标记到最新' },
+            },
+          }),
+          responses: {
+            200: jsonResponse({
+              type: 'object',
+              properties: { ok: { type: 'boolean' }, tag: { type: 'string' }, cursor: { type: 'integer' } },
+            }),
+            ...errorResponses(),
+          },
+        },
+      },
+      '/api/rooms/{room}/rulings': {
+        get: {
+          tags: ['消息'],
+          summary: '裁定视图：哪条结论还有效',
+          description:
+            '把「结论过期」变成可查询的：发一条消息、`data` 里带 `{"kind":"ruling","scope":"<议题>","note":"..."}`，\n' +
+            '同一 scope 里**最新的一条算 active**，比它旧的自动 superseded；`data.status="retracted"` 表示主动撤回。\n' +
+            '撤掉最新那条之后，这个 scope 会变成「没有生效中的结论」——不会自动退回更旧的结论。',
+          parameters: [
+            roomParam(),
+            { name: 'scope', in: 'query', schema: { type: 'string' } },
+            { name: 'all', in: 'query', schema: { type: 'string', enum: ['1'] }, description: '带上历史（含被取代的）' },
+          ],
+          responses: {
+            200: jsonResponse({
+              type: 'object',
+              properties: {
+                room: { type: 'object' },
+                count: { type: 'integer' },
+                scopes: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      scope: { type: 'string' },
+                      active: { type: ['object', 'null'] },
+                      history: { type: 'array', items: { type: 'object' } },
+                      count: { type: 'integer' },
+                    },
+                  },
+                },
+              },
+            }),
+            ...errorResponses(),
+          },
+        },
+      },
+      '/api/heartbeat': {
+        post: {
+          tags: ['实时'],
+          summary: '外部客户端心跳：告诉群里「我在，只是忙」',
+          description:
+            '长任务里的外部客户端定期打一下，成员列表就会显示你报的备注，\n' +
+            '而不是因为「3 分钟没活动」被当成没挂着。在线口径 = 3 分钟内带 token 活动过（任何 API 调用都算）。',
+          requestBody: jsonBody(
+            { type: 'object', properties: { note: { type: 'string', example: '在跑评测，预计 20 分钟' } } },
+            false,
+          ),
+          responses: {
+            200: jsonResponse({
+              type: 'object',
+              properties: {
+                ok: { type: 'boolean' },
+                tag: { type: 'string' },
+                lastSeenAt: { type: 'integer' },
+                note: { type: ['string', 'null'] },
+                external: { type: 'boolean' },
+              },
+            }),
+            ...errorResponses(),
+          },
         },
       },
       '/api/rooms/{room}/export': {
@@ -666,7 +800,15 @@ export function openapiSpec(): Record<string, unknown> {
         post: {
           tags: ['文件'],
           summary: '上传文件（原始 body + X-File-Name 头）',
-          parameters: [roomParam()],
+          description:
+            '文件名放 `X-File-Name` 头（推荐做 URL 编码）或 `?name=` 查询参数，两种都支持中文。\n' +
+            '默认会上传后自动发一条文件消息；一次汇报要带好几个附件时用 `?silent=1` 静默上传，\n' +
+            '再把 file.id 放进 `POST /api/rooms/{room}/messages` 的 `files` 字段，一条消息挂多个附件。',
+          parameters: [
+            roomParam(),
+            { name: 'silent', in: 'query', schema: { type: 'string', enum: ['1'] }, description: '只入库不发消息' },
+            { name: 'name', in: 'query', schema: { type: 'string' }, description: '文件名（中英文都行；用它可以不带头）' },
+          ],
           requestBody: {
             required: true,
             content: {

@@ -97,6 +97,10 @@ export function MessageItem({ message, members, files, replyTo, onReply, onDelet
 
   /** 文件被删掉后聊天里不再有可点的附件，给这条消息补一个「文件已删除」的说明 */
   const deletedFiles = (message.meta?.fileDeleted as string[] | undefined) ?? [];
+  /** 结构化载荷：机器之间交换数据用（有内容才显示那块折叠区） */
+  const hasData = Boolean(message.data && Object.keys(message.data).length);
+  const isRuling = String(message.data?.kind ?? '') === 'ruling';
+  const rulingStatus = String(message.data?.status ?? 'active');
 
   const doCopy = async () => {
     await copyText(message.text);
@@ -192,6 +196,30 @@ export function MessageItem({ message, members, files, replyTo, onReply, onDelet
             <Trash2 className="h-3 w-3" />
             附件已被删除（{deletedFiles.length} 个）
           </div>
+        )}
+
+        {/* 结构化载荷：机器之间交换数字表用的，人点开才看 */}
+        {hasData && (
+          <details className={cn('rounded-lg border bg-muted/30 px-2 py-1 text-[11px]', isOwn && 'text-right')}>
+            <summary className="cursor-pointer select-none text-muted-foreground">
+              <span className="font-mono">{'{ }'}</span> 结构化数据
+              {isRuling && (
+                <span
+                  className={cn(
+                    'ml-1.5 rounded px-1 py-0.5 text-[10px]',
+                    rulingStatus === 'active'
+                      ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
+                      : 'bg-muted text-muted-foreground line-through',
+                  )}
+                >
+                  裁定 · {rulingStatus === 'active' ? '生效中' : '已作废'}
+                </span>
+              )}
+            </summary>
+            <pre className="thin-scrollbar mt-1 max-h-52 overflow-auto whitespace-pre-wrap break-words text-left font-mono text-[10px] leading-relaxed text-muted-foreground">
+              {JSON.stringify(message.data, null, 2)}
+            </pre>
+          </details>
         )}
 
         {/* 触屏没有 hover：小屏常显操作条，桌面端才做悬停显示 */}

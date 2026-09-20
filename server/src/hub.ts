@@ -38,6 +38,8 @@ const subscribers = new Map<number, Subscriber>();
 const presence = new Map<string, number>();
 const agentStatus = new Map<string, { status: AgentStatus; detail?: string; ts: number }>();
 const queueDepth = new Map<string, number>();
+/** 外部客户端可以主动报一句状态（"我在，只是忙"）——比"最近活跃"更能说明问题 */
+const presenceNotes = new Map<string, { note: string; ts: number }>();
 const startedAt = Date.now();
 
 export function subscribe(
@@ -146,4 +148,15 @@ export function runtimeSnapshot(): Record<string, unknown> {
 export function clearAgentPresence(tag: string): void {
   agentStatus.delete(tag);
   queueDepth.delete(tag);
+  presenceNotes.delete(tag);
+}
+
+/** 外部客户端主动上报的状态备注（例如「在跑评测，预计 20 分钟」） */
+export function setPresenceNote(tag: string, note: string | null): void {
+  if (note && note.trim()) presenceNotes.set(tag, { note: note.trim().slice(0, 120), ts: Date.now() });
+  else presenceNotes.delete(tag);
+}
+
+export function getPresenceNote(tag: string): string | null {
+  return presenceNotes.get(tag)?.note ?? null;
 }
