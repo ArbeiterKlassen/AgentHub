@@ -275,5 +275,21 @@ export async function probeAdapter(adapter: AdapterPreset): Promise<AdapterProbe
 }
 
 export async function probeAll(): Promise<AdapterProbe[]> {
-  return Promise.all(loadAdapters().map((a) => probeAdapter(a)));
+  /**
+   * 探测要为每个适配器 spawn 一个命令（本机 13 个），而 /api/health 会被守护进程每 30 秒打一次。
+   * 不加缓存，光健康巡检就每半分钟起一拨进程，单次耗时约 1.8 秒，也更容易碰上系统层面的抖动。
+   * 这里缓存 30 秒；需要绕过缓存时用 probeAllFresh。
+   */
+  if (probeCache && Date.now() - probeCache.at < PROBE_TTL_MS) return probeCache.list;
+  return probeAllFresh();
+}
+
+const PROBE_TTL_MS = 30_000;
+let probeCache: { at: number; list: AdapterProbe[] } | null = null;
+
+/** 强制重新探测（界面点「刷新适配器」时用） */
+export async function probeAllFresh(): Promise<AdapterProbe[]> {
+  const list = await Promise.all(loadAdapters().map((a) => probeAdapter(a)));
+  probeCache = { at: Date.now(), list };
+  return list;
 }

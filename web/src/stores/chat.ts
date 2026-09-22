@@ -32,6 +32,7 @@ interface ChatState {
   renameGroup: (id: string, name: string) => Promise<void>;
   deleteGroup: (id: string) => Promise<{ movedRooms: number }>;
   moveGroup: (id: string, sort: number) => Promise<void>;
+  reorderGroups: (ids: string[]) => Promise<void>;
   moveRoomToGroup: (roomId: string, groupId: string | null) => Promise<void>;
   openRoom: (roomId: string) => Promise<void>;
   createRoom: (input: { name: string; topic?: string; members?: string[] }) => Promise<RoomSummary>;
@@ -124,6 +125,16 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   moveGroup: async (id, sort) => {
     await apiClient.patchGroup(id, { sort });
+    await get().loadGroups();
+  },
+
+  /** 拖拽排序：先本地重排（界面跟手），再提交给服务端 */
+  reorderGroups: async (ids) => {
+    const current = get().groups;
+    const byId = new Map(current.map((g) => [g.id, g]));
+    const next = ids.map((id, index) => ({ ...(byId.get(id) as RoomGroup), sort: index + 1 })).filter((g) => g.id);
+    if (next.length === current.length) set({ groups: next });
+    await apiClient.reorderGroups(ids);
     await get().loadGroups();
   },
 

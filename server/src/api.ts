@@ -60,7 +60,7 @@ import {
   requireAdmin,
   assertTag,
 } from './auth.js';
-import { isExternalAdapter, loadAdapters, probeAll } from './adapters.js';
+import { isExternalAdapter, loadAdapters, probeAll, probeAllFresh } from './adapters.js';
 import { handleDownload, handleUpload, listRoomFiles, publicFile, purgeRoomFiles, removeFile } from './files.js';
 import { detachFileFromMessages, publicMessage, postMessage, roomMemberTagSet, systemMessage } from './messages.js';
 import {
@@ -483,7 +483,9 @@ export function buildApiRouter(): Router {
   api.get(
     '/adapters',
     wrap(async (req) => {
-      const probes = await probeAll();
+      // ?fresh=1 绕过 30 秒探测缓存，界面点「刷新」时用
+      const fresh = req.query.fresh === '1' || req.query.fresh === 'true';
+      const probes = fresh ? await probeAllFresh() : await probeAll();
       const map = new Map(probes.map((p) => [p.id, p]));
       const adapters = loadAdapters().map((a) => ({
         ...a,
@@ -507,6 +509,8 @@ export function buildApiRouter(): Router {
       code: room.code,
       /** 所属分组 id（null = 未分组）：侧栏按它把房间分堆 */
       groupId: room.group_id ?? null,
+      /** 分组名（顺手带出来，免得每个客户端自己再查一次） */
+      groupName: room.group_id ? (getRoomGroup(room.group_id)?.name ?? null) : null,
       meta: { ...DEFAULT_ROOM_META, ...parseJson<Record<string, unknown>>(room.meta, {}) },
       createdBy: room.created_by,
       createdAt: room.created_at,
@@ -636,6 +640,31 @@ export function buildApiRouter(): Router {
         return (!room.group_id || !getRoomGroup(room.group_id)) && !accounted.has(id);
       });
       return { groups, ungrouped };
+    }),
+  );
+
+  /**
+   * 拖拽排序：按传入的 id 顺序重排分组。
+   * 顺序只是展示偏好、可逆且不丢数据，所以任何登录成员都能调；
+   * 改名与删除仍然限「分组创建者或管理员」。
+   */
+  api.post(
+    '/groups/reorder',
+    wrap((req) => {
+      requireAuth(req);
+      const ids = ((req.body as { ids?: unknown })?.ids ?? []) as unknown;
+      if (!Array.isArray(ids) || !ids.length) throw new HttpError(400, '缺少 ids（按新顺序排列的分组 id）');
+      let sort = 0;
+      let applied = 0;
+      for (const raw of ids.slice(0, 200)) {
+        const id = String(raw);
+        if (!getRoomGroup(id)) continue;
+        sort += 1;
+        updateRoomGroup(id, { sort });
+        applied += 1;
+      }
+      broadcast({ type: 'group.update', data: { action: 'reordered' }, ts: Date.now() });
+      return { ok: true, applied, order: ids };
     }),
   );
 
@@ -1528,8 +1557,13 @@ export function buildApiRouter(): Router {
 
   api.get(
     '/health',
-    wrap(async () => {
-      const probes = await probeAll();
+    wrap(async (req) => {
+      /**
+       * 轻量存活检查：默认不带上适配器探测结果（探测要 spawn 一堆进程，而守护进程每 30 秒就会打一次）。
+       * 需要适配器状态时加 ?probe=1，或直接读 /api/adapters。
+       */
+      const withProbes = req.query.probe === '1' || req.query.probe === 'true';
+      const probes = withProbes ? await probeAll() : [];
       return {
         ok: true,
         version: '0.1.0',

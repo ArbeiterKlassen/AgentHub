@@ -111,7 +111,7 @@ async function run() {
   console.log(`\n=== AgentHub 端到端自检 ===\n服务：${SERVER}\n房间：${ROOM}\n`);
 
   /* 1. 健康检查 */
-  const health = await api('/api/health');
+  const health = await api('/api/health?probe=1');
   check('服务健康检查 /api/health', health.ok && health.data.ok, `Node ${health.data.node}`);
   const mockProbe = health.data.adapters?.find((a) => a.id === 'mock');
   check('适配器探测：mock 可用', Boolean(mockProbe?.available), mockProbe?.detail ?? '');
@@ -751,6 +751,26 @@ async function run() {
     '删掉的分组不再出现在列表里',
     !(groupsAfterDelete.data.groups ?? []).some((g) => g.id === groupId),
   );
+
+  /* 分组拖拽排序：按传入顺序重排 sort */
+  const sortA = (await api('/api/groups', { method: 'POST', token: tokens[alice], body: { name: `e2e排序A-${RUN}` } })).data.group;
+  const sortB = (await api('/api/groups', { method: 'POST', token: tokens[alice], body: { name: `e2e排序B-${RUN}` } })).data.group;
+  const reorder = await api('/api/groups/reorder', {
+    method: 'POST',
+    token: tokens[alice],
+    body: { ids: [sortB.id, sortA.id] },
+  });
+  const afterReorder = (await api('/api/groups', { token: tokens[alice] })).data.groups ?? [];
+  const orderOf = (id) => afterReorder.filter((g) => [sortA.id, sortB.id].includes(g.id)).findIndex((g) => g.id === id);
+  check(
+    '拖拽排序：分组顺序按提交的 ids 生效',
+    reorder.ok && orderOf(sortB.id) === 0 && orderOf(sortA.id) === 1,
+    `B=${orderOf(sortB.id)} A=${orderOf(sortA.id)}`,
+  );
+  await api(`/api/groups/${sortA.id}`, { method: 'DELETE', token: tokens[alice] });
+  await api(`/api/groups/${sortB.id}`, { method: 'DELETE', token: tokens[alice] });
+  const reorderBad = await api('/api/groups/reorder', { method: 'POST', token: tokens[alice], body: { ids: [] } });
+  check('排序接口缺 ids 时返回 400', reorderBad.status === 400, `status=${reorderBad.status}`);
 
   /* 20. 解散房间：群主可删自己建的、管理员可删任意，并且磁盘文件一并清掉 */
   const strangerTag = `stranger-${suffix}`;

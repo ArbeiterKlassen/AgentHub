@@ -206,6 +206,9 @@ curl -s -X POST "$BASE/api/rooms/<房间>/messages" -H "Authorization: Bearer $T
 | POST | `/api/groups` 🔒 | 新建分组。body: `{name}` → `{group}` |
 | PATCH | `/api/groups/:id` 🔒 | 分组改名 / 调顺序。body: `{name?, sort?}`（限分组创建者或管理员） |
 | DELETE | `/api/groups/:id` 🔒 | 删分组（限创建者或管理员）：**群不会被删**，里面的群回到「未分组」，返回 `{movedRooms}` |
+| POST | `/api/groups/reorder` 🔒 | 拖拽排序。body: `{ids:[分组id]}`，按数组顺序重排（顺序只影响展示，任何登录成员都能调） |
+
+房间对象里带 `groupId` 与 `groupName` 两个字段，CLI 的 `ah rooms` 会显示所属分组。
 
 ### 消息
 
@@ -281,7 +284,8 @@ curl -s -X POST "$BASE/api/rooms/房间/files" \
 | POST | `/api/agents/:tag/runs` 🔒 | 边缘运行器上报运行记录 |
 | GET | `/api/usage` 🔒 | **token 用量汇总**。参数：`days`(默认7) `room` `tag` → `{total, byAgent:[{tag, runs, measuredRuns, tokensTotal, costUsd, durationMs}]}`。只有 CLI 自报用量的调用才计入，`measuredRuns` 说明有多少次有上报 |
 | GET | `/api/adapters` | 适配器预设与可用性探测 |
-| GET | `/api/health` | 健康检查（含 `lanUrls`） |
+| GET | `/api/health` | 健康检查。默认不跑适配器探测（守护进程每 30 秒会打一次，探测要 spawn 一堆进程）；要适配器状态加 `?probe=1`，或读 `/api/adapters` |
+| GET | `/api/adapters` | 适配器探测结果，30 秒缓存；`?fresh=1` 强制重探 |
 | GET | `/api/status` | 调度器状态（队列、活跃运行数、讨论链、数据目录磁盘余量） |
 | GET | `/openapi.json` | OpenAPI 3.1 规格（无需认证） |
 | WS | `/ws?token=<token>` | 实时事件（见 §6） |

@@ -23,13 +23,29 @@ import type { RoomSummary } from '@/lib/types';
 const UNGROUPED = '__ungrouped__';
 
 export function RoomList({ onNavigate }: { onNavigate?: () => void } = {}) {
-  const { rooms, groups, activeRoomId, openRoom, moveRoomToGroup, createGroup } = useChatStore();
+  const { rooms, groups, activeRoomId, openRoom, moveRoomToGroup, createGroup, reorderGroups } = useChatStore();
   const pushToast = useUiStore((s) => s.pushToast);
   const collapsedGroups = useUiStore((s) => s.collapsedGroups);
   const toggleGroupCollapsed = useUiStore((s) => s.toggleGroupCollapsed);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
   const [groupManagerOpen, setGroupManagerOpen] = useState(false);
+  /** 拖拽中：dragPayload 记住正在拖的是分组还是房间 */
+  const [dragPayload, setDragPayload] = useState<{ kind: 'group' | 'room'; id: string } | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+
+  /** 分组换序：把 fromId 挪到 toId 的位置，提交整串新顺序 */
+  const dropGroupOn = (fromId: string, toId: string) => {
+    if (fromId === toId) return;
+    const ids = groups.map((g) => g.id);
+    const from = ids.indexOf(fromId);
+    const to = ids.indexOf(toId);
+    if (from < 0 || to < 0) return;
+    ids.splice(to, 0, ...ids.splice(from, 1));
+    void reorderGroups(ids).catch((err) =>
+      pushToast(err instanceof Error ? err.message : String(err), 'error'),
+    );
+  };
 
   const select = async (roomId: string) => {
     log.action('切换房间', roomId);
@@ -60,6 +76,16 @@ export function RoomList({ onNavigate }: { onNavigate?: () => void } = {}) {
         key={room.id}
         role="button"
         tabIndex={0}
+        draggable
+        onDragStart={(e) => {
+          setDragPayload({ kind: 'room', id: room.id });
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', room.id);
+        }}
+        onDragEnd={() => {
+          setDragPayload(null);
+          setDropTarget(null);
+        }}
         onClick={() => void select(room.id)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') void select(room.id);
@@ -173,14 +199,54 @@ export function RoomList({ onNavigate }: { onNavigate?: () => void } = {}) {
 
         {buckets.map((bucket) => {
           const collapsed = collapsedGroups.includes(bucket.id);
+          const isGroupBucket = bucket.id !== UNGROUPED;
+          const isDropTarget = dropTarget === bucket.id;
           return (
-            <div key={bucket.id} className="mb-1">
+            <div
+              key={bucket.id}
+              className={cn('mb-1 rounded-md transition-colors', isDropTarget && 'bg-primary/10 ring-1 ring-primary/40')}
+              onDragOver={(e) => {
+                // 拖分组 = 换序；拖房间 = 挪进这个分组（未分组那个桶就是挪出去）
+                if (!dragPayload) return;
+                if (dragPayload.kind === 'group' && !isGroupBucket) return;
+                e.preventDefault();
+                setDropTarget(bucket.id);
+              }}
+              onDragLeave={() => setDropTarget((cur) => (cur === bucket.id ? null : cur))}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDropTarget(null);
+                if (!dragPayload) return;
+                if (dragPayload.kind === 'group' && isGroupBucket) dropGroupOn(dragPayload.id, bucket.id);
+                if (dragPayload.kind === 'room') {
+                  void moveRoomToGroup(dragPayload.id, isGroupBucket ? bucket.id : null)
+                    .then(() => pushToast(isGroupBucket ? `已移入「${bucket.name}」` : '已移出分组', 'success'))
+                    .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
+                }
+                setDragPayload(null);
+              }}
+            >
               <button
                 type="button"
+                draggable={isGroupBucket}
+                onDragStart={(e) => {
+                  if (!isGroupBucket) return;
+                  setDragPayload({ kind: 'group', id: bucket.id });
+                  e.dataTransfer.effectAllowed = 'move';
+                  e.dataTransfer.setData('text/plain', bucket.id);
+                }}
+                onDragEnd={() => {
+                  setDragPayload(null);
+                  setDropTarget(null);
+                }}
                 onClick={() => toggleGroupCollapsed(bucket.id)}
                 /* 不强制大写：分组名是用户自己起的，AgentHub 就该显示成 AgentHub 而不是 AGENTHUB */
                 className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[11px] font-medium tracking-wide text-muted-foreground transition-colors hover:bg-accent/50"
-                title={collapsed ? '展开' : '折叠'}
+                title={
+                  isGroupBucket
+                    ? `${collapsed ? '展开' : '折叠'}（拖动可换分组顺序；把房间拖到这里可移入本组）`
+                    : '把房间拖到这里可移出分组'
+                }
               >
                 {collapsed ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
                 <Folder className="h-3 w-3 shrink-0" />

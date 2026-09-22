@@ -77,7 +77,7 @@ export function SettingsPage() {
   const testConnection = async () => {
     setTesting(true);
     try {
-      const res = await apiClient.health();
+      const res = await apiClient.health(true);
       pushToast(`连接正常：AgentHub ${res.version}，可见 ${res.adapters.filter((a) => a.available).length} 个可用适配器`, 'success');
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error');

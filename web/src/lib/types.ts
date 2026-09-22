@@ -34,6 +34,8 @@ export interface RoomSummary {
   code: string;
   /** 所属分组 id（null = 未分组）：侧栏按它把房间分堆 */
   groupId?: string | null;
+  /** 分组名（服务端顺手带出来，便于 CLI 与界面直接显示） */
+  groupName?: string | null;
   meta: Record<string, unknown>;
   createdBy: string | null;
   createdAt: number;

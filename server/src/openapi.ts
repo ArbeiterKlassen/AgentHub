@@ -402,6 +402,27 @@ export function openapiSpec(): Record<string, unknown> {
           },
         },
       },
+      '/api/groups/reorder': {
+        post: {
+          tags: ['房间'],
+          summary: '分组拖拽排序',
+          description:
+            '按 `ids` 的顺序重排分组。顺序只影响展示、可逆且不丢数据，所以任何登录成员都能调；\n' +
+            '改名与删除仍然限分组创建者或管理员。',
+          requestBody: jsonBody({
+            type: 'object',
+            properties: { ids: { type: 'array', items: { type: 'string' }, description: '按新顺序排列的分组 id' } },
+            required: ['ids'],
+          }),
+          responses: {
+            200: jsonResponse({
+              type: 'object',
+              properties: { ok: { type: 'boolean' }, applied: { type: 'integer' }, order: { type: 'array', items: { type: 'string' } } },
+            }),
+            ...errorResponses(),
+          },
+        },
+      },
       '/api/groups/{id}': {
         patch: {
           tags: ['房间'],
@@ -1119,7 +1140,13 @@ export function openapiSpec(): Record<string, unknown> {
       '/api/health': {
         get: {
           tags: ['运维'],
-          summary: '健康检查（含适配器探测，不需要登录）',
+          summary: '健康检查（不需要登录；默认不跑适配器探测）',
+          description:
+            '默认只回版本、平台、数据目录与局域网地址，不启动任何子进程（守护进程每 30 秒会打一次这个接口）。\n' +
+            '需要适配器可用性时加 `?probe=1`，或者直接读 `/api/adapters`（那里有 30 秒缓存，`?fresh=1` 可强制重探）。',
+          parameters: [
+            { name: 'probe', in: 'query', schema: { type: 'string', enum: ['1'] }, description: '同时返回适配器探测结果' },
+          ],
           security: [],
           responses: { 200: jsonResponse({ type: 'object' }) },
         },

@@ -85,14 +85,15 @@ export interface RegisterInput {
 }
 
 export const apiClient = {
-  health: () =>
+  /** withProbes=true 时才做适配器探测（探测要 spawn 一堆进程，默认走轻量版） */
+  health: (withProbes = false) =>
     api<{
       ok: boolean;
       node: string;
       version: string;
       adapters: AdapterInfo[];
       lanUrls?: string[];
-    }>('/api/health', { auth: false }),
+    }>(`/api/health${withProbes ? '?probe=1' : ''}`, { auth: false }),
 
   register: (input: RegisterInput) =>
     api<{ member: Member; token: string }>('/api/register', { method: 'POST', body: input, auth: false }),
@@ -126,6 +127,10 @@ export const apiClient = {
 
   patchGroup: (id: string, patch: { name?: string; sort?: number }) =>
     api<{ group: RoomGroup }>(`/api/groups/${encodeURIComponent(id)}`, { method: 'PATCH', body: patch }),
+
+  /** 拖拽排序：把分组按新顺序提交（顺序是展示偏好，任何成员都能调） */
+  reorderGroups: (ids: string[]) =>
+    api<{ ok: boolean; applied: number }>('/api/groups/reorder', { method: 'POST', body: { ids } }),
 
   deleteGroup: (id: string) =>
     api<{ ok: boolean; removed: string; movedRooms: number }>(`/api/groups/${encodeURIComponent(id)}`, {

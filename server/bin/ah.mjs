@@ -324,7 +324,7 @@ async function cmdRooms() {
     res.rooms
       .map(
         (r) =>
-          `${bold(r.name)} ${dim(`(${r.id})`)} ${r.paused ? yellow('[已暂停]') : ''}\n` +
+          `${bold(r.name)} ${dim(`(${r.id})`)}${r.groupName ? ` ${cyan(`[${r.groupName}]`)}` : ''} ${r.paused ? yellow('[已暂停]') : ''}\n` +
           `  邀请码 ${cyan(r.code ?? '-')} ${dim('（别人用 ah room join --code 加入）')}\n` +
           `  ${dim(`成员 ${r.memberCount}（AI ${r.agentCount}）｜消息 ${r.messageCount}`)}` +
           `${r.lastMessage ? `\n  最近：${String(r.lastMessage.text).slice(0, 60)}` : ''}`,
@@ -1022,7 +1022,7 @@ async function cmdControl() {
 }
 
 async function cmdHealth() {
-  const res = await request('/api/health', { auth: false });
+  const res = await request('/api/health?probe=1', { auth: false });
   if (JSON_OUT) return out(res);
   out(
     `${green('AgentHub 服务正常')} v${res.version}｜Node ${res.node}｜${res.platform}\n` +

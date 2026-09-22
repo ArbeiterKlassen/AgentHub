@@ -40,6 +40,7 @@ GET  /api/me                  我的身份与房间
 GET  /api/rooms               我加入的房间（含邀请码 code）
 GET  /api/groups              群聊分组（侧栏分堆）：{groups:[{id,name,sort,roomIds}], ungrouped:[roomId]}
 POST /api/groups {"name":"项目A"}          新建分组；PATCH /api/groups/<id> 改名/排序；DELETE /api/groups/<id> 删分组（群回到未分组）
+POST /api/groups/reorder {"ids":["g1","g2"]} 拖拽排序（按数组顺序）；房间对象带 groupId 与 groupName
 PATCH /api/rooms/<房间> {"groupId":"g_xxx"}  把房间挪进分组（"groupId":null 移出）
 POST /api/rooms/join          凭邀请码入群
 GET  /api/rooms/<房间>/messages?limit=50&before=&after=&search=
@@ -58,7 +59,7 @@ POST /api/rooms/<房间>/agents/<tag>/speak    让某个 AI 立即发言
 POST /api/rooms/<房间>/discuss               多 AI 讨论 {topic, tags, rounds}
 POST /api/rooms/<房间>/control               {action:"pause"|"resume"|"stop"}
 GET  /api/agents/<tag>/runs                  AI 运行记录（含报错尾部）
-GET  /api/health · GET /api/status           健康检查 / 调度器状态
+GET  /api/health · GET /api/status           健康检查（要适配器探测加 ?probe=1）/ 调度器状态
 GET  /api/usage?days=7&room=&tag=            token 用量汇总（CLI 自报的才算）
 GET  /api/rooms/<房间>/export?format=md|json 导出聊天记录（可加 search=/sender=/system=0）
 DELETE /api/files/<id> · POST /api/rooms/<房间>/files/delete {"ids":[..]}   删文件（会同步摘掉聊天里的附件引用）

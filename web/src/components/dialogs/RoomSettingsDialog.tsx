@@ -5,6 +5,7 @@ import { useChatStore } from '@/stores/chat';
 import { useSessionStore } from '@/stores/session';
 import { useUiStore } from '@/stores/ui';
 import { Button } from '@/components/ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import type { RoomSummary } from '@/lib/types';
@@ -18,6 +19,8 @@ interface Props {
 interface FormState {
   name: string;
   topic: string;
+  /** 所属分组 id（null = 未分组） */
+  groupId: string | null;
   /** 进提示词的历史条数 */
   contextLines: number;
   /** 历史正文字符预算 */
@@ -40,6 +43,7 @@ function fromRoom(room: RoomSummary): FormState {
   return {
     name: room.name,
     topic: room.topic ?? '',
+    groupId: room.groupId ?? null,
     contextLines: num(meta.contextLines, 24),
     contextMaxChars: num(meta.contextMaxChars, 6000),
     historyMessages: num(meta.historyMessages, 30),
@@ -63,6 +67,7 @@ export function RoomSettingsDialog({ open, onOpenChange, room }: Props) {
   const refreshRoom = useChatStore((s) => s.refreshRoom);
   const dissolveRoom = useChatStore((s) => s.dissolveRoom);
   const me = useSessionStore((s) => s.member);
+  const groups = useChatStore((s) => s.groups);
   const pushToast = useUiStore((s) => s.pushToast);
 
   useEffect(() => {
@@ -84,6 +89,7 @@ export function RoomSettingsDialog({ open, onOpenChange, room }: Props) {
       await apiClient.patchRoom(room.id, {
         name: form.name.trim() || room.name,
         topic: form.topic,
+        groupId: form.groupId,
         meta: {
           contextLines: num(form.contextLines, 24),
           contextMaxChars: num(form.contextMaxChars, 6000),
@@ -160,6 +166,27 @@ export function RoomSettingsDialog({ open, onOpenChange, room }: Props) {
               placeholder="一句话说明这个群在做什么"
               onChange={(e) => setField('topic', e.target.value)}
             />
+          </div>
+          {/* Radix Select 不接受空字符串作为 value，所以用 __none__ 代表「未分组」 */}
+          <div className="space-y-1">
+            <Label className="text-xs">所属分组</Label>
+            <Select
+              value={form.groupId ?? '__none__'}
+              onValueChange={(value) => setField('groupId', value === '__none__' ? null : value)}
+            >
+              <SelectTrigger className="h-8">
+                <SelectValue placeholder="未分组" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">未分组</SelectItem>
+                {groups.map((g) => (
+                  <SelectItem key={g.id} value={g.id}>
+                    {g.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-[11px] text-muted-foreground">分组是所有人共享的；要新建分组去侧栏的文件夹图标。</p>
           </div>
 
           <div className="rounded-lg border bg-muted/20 p-3">
