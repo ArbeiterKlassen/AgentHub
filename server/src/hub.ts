@@ -13,6 +13,7 @@ export interface HubEvent {
     | 'room.created'
     | 'room.update'
     | 'room.deleted'
+    | 'group.update'
     | 'file.add'
     | 'file.remove'
     | 'typing'

@@ -1,4 +1,4 @@
-import type { AdapterInfo, ChatMessage, Member, RoomSummary, RunRecord, SharedFile } from './types';
+import type { AdapterInfo, ChatMessage, Member, RoomGroup, RoomSummary, RunRecord, SharedFile } from './types';
 import { log } from './logger';
 
 export class ApiError extends Error {
@@ -117,6 +117,20 @@ export const apiClient = {
     api<{ ok: boolean; removed: string }>(`/api/members/${tag}${force ? '?force=1' : ''}`, { method: 'DELETE' }),
 
   rooms: () => api<{ rooms: RoomSummary[] }>('/api/rooms'),
+
+  /** 群聊分组：分组是房间的属性，所有人看到同一套 */
+  groups: () => api<{ groups: RoomGroup[]; ungrouped: string[] }>('/api/groups'),
+
+  createGroup: (name: string) =>
+    api<{ group: RoomGroup }>('/api/groups', { method: 'POST', body: { name } }),
+
+  patchGroup: (id: string, patch: { name?: string; sort?: number }) =>
+    api<{ group: RoomGroup }>(`/api/groups/${encodeURIComponent(id)}`, { method: 'PATCH', body: patch }),
+
+  deleteGroup: (id: string) =>
+    api<{ ok: boolean; removed: string; movedRooms: number }>(`/api/groups/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
 
   room: (roomId: string) =>
     api<{ room: RoomSummary; members: Member[]; files: SharedFile[] }>(`/api/rooms/${encodeURIComponent(roomId)}`),

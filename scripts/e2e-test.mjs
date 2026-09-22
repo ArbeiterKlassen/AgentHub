@@ -702,6 +702,56 @@ async function run() {
     String(notedMember?.presenceNote),
   );
 
+  /* 19d. 群聊分组：建 / 改名 / 移动房间 / 权限 / 删除后回到未分组 */
+  const group = await api('/api/groups', { method: 'POST', token: tokens[alice], body: { name: `e2e组-${RUN}` } });
+  const groupId = group.data.group?.id;
+  check('可以新建群聊分组', group.ok && Boolean(groupId), `groupId=${groupId}`);
+
+  const roomInfo = await api(`/api/rooms/${ROOM}`, { token: tokens[alice] });
+  const roomIdForGroup = roomInfo.data.room.id;
+  const moved = await api(`/api/rooms/${ROOM}`, { method: 'PATCH', token: tokens[alice], body: { groupId } });
+  check('可以把房间移进分组', moved.ok && moved.data.room.groupId === groupId, `groupId=${moved.data.room.groupId}`);
+
+  const groupsAfterMove = await api('/api/groups', { token: tokens[alice] });
+  const bucket = (groupsAfterMove.data.groups ?? []).find((g) => g.id === groupId);
+  check('分组列表里能看到这个房间', Boolean(bucket?.roomIds?.includes(roomIdForGroup)), `roomIds=${JSON.stringify(bucket?.roomIds)}`);
+
+  const badGroup = await api(`/api/rooms/${ROOM}`, {
+    method: 'PATCH',
+    token: tokens[alice],
+    body: { groupId: 'g_不存在' },
+  });
+  check('移到不存在的分组会报 404（不静默忽略）', badGroup.status === 404, `status=${badGroup.status}`);
+
+  const groupieTag = `groupie-${suffix}`;
+  await register(groupieTag, '分组路人');
+  const groupieRename = await api(`/api/groups/${groupId}`, {
+    method: 'PATCH',
+    token: tokens[groupieTag],
+    body: { name: '别人想改名' },
+  });
+  check('非创建者 / 非管理员不能改别人的分组（403）', groupieRename.status === 403, `status=${groupieRename.status}`);
+
+  const renamed = await api(`/api/groups/${groupId}`, {
+    method: 'PATCH',
+    token: tokens[alice],
+    body: { name: `e2e组改名-${RUN}` },
+  });
+  check('创建者可以给分组改名', renamed.ok && renamed.data.group.name === `e2e组改名-${RUN}`, renamed.data.group?.name);
+
+  const groupDel = await api(`/api/groups/${groupId}`, { method: 'DELETE', token: tokens[alice] });
+  const groupsAfterDelete = await api('/api/groups', { token: tokens[alice] });
+  const roomAfterUngroup = await api(`/api/rooms/${ROOM}`, { token: tokens[alice] });
+  check(
+    '删分组：房间回到未分组、房间本身还在',
+    groupDel.ok && groupDel.data.movedRooms >= 1 && roomAfterUngroup.ok && roomAfterUngroup.data.room.groupId === null,
+    `movedRooms=${groupDel.data.movedRooms} groupId=${roomAfterUngroup.data.room.groupId}`,
+  );
+  check(
+    '删掉的分组不再出现在列表里',
+    !(groupsAfterDelete.data.groups ?? []).some((g) => g.id === groupId),
+  );
+
   /* 20. 解散房间：群主可删自己建的、管理员可删任意，并且磁盘文件一并清掉 */
   const strangerTag = `stranger-${suffix}`;
   await register(strangerTag, '路人');

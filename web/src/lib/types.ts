@@ -32,6 +32,8 @@ export interface RoomSummary {
   topic: string;
   /** 群聊唯一识别码（邀请码）：显示给成员复制，别人凭它加入 */
   code: string;
+  /** 所属分组 id（null = 未分组）：侧栏按它把房间分堆 */
+  groupId?: string | null;
   meta: Record<string, unknown>;
   createdBy: string | null;
   createdAt: number;
@@ -42,6 +44,16 @@ export interface RoomSummary {
   lastMessage: ChatMessage | null;
   paused: boolean;
   isMember: boolean;
+}
+
+/** 群聊分组（侧栏里的「文件夹」）：挂在房间上，所有人看到同一套 */
+export interface RoomGroup {
+  id: string;
+  name: string;
+  sort: number;
+  createdBy: string | null;
+  createdAt: number;
+  roomIds: string[];
 }
 
 export interface ChatMessage {

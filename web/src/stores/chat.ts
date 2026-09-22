@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { apiClient, configureApi } from '@/lib/api';
 import { log } from '@/lib/logger';
-import type { ChatMessage, Member, RealtimeEvent, RoomSummary, SharedFile } from '@/lib/types';
+import type { ChatMessage, Member, RealtimeEvent, RoomGroup, RoomSummary, SharedFile } from '@/lib/types';
 import { useSessionStore } from './session';
 
 interface TypingState {
@@ -12,6 +12,8 @@ interface TypingState {
 
 interface ChatState {
   rooms: RoomSummary[];
+  /** 群聊分组（房间级属性，所有人共享） */
+  groups: RoomGroup[];
   activeRoomId: string | null;
   messages: Record<string, ChatMessage[]>;
   members: Record<string, Member[]>;
@@ -25,6 +27,12 @@ interface ChatState {
   focusMessageId: number | null;
 
   loadRooms: () => Promise<RoomSummary[]>;
+  loadGroups: () => Promise<RoomGroup[]>;
+  createGroup: (name: string) => Promise<RoomGroup>;
+  renameGroup: (id: string, name: string) => Promise<void>;
+  deleteGroup: (id: string) => Promise<{ movedRooms: number }>;
+  moveGroup: (id: string, sort: number) => Promise<void>;
+  moveRoomToGroup: (roomId: string, groupId: string | null) => Promise<void>;
   openRoom: (roomId: string) => Promise<void>;
   createRoom: (input: { name: string; topic?: string; members?: string[] }) => Promise<RoomSummary>;
   joinRoomByCode: (code: string) => Promise<{ room: RoomSummary; alreadyMember: boolean }>;
@@ -59,6 +67,7 @@ function mergeMessages(existing: ChatMessage[], incoming: ChatMessage[]): ChatMe
 
 export const useChatStore = create<ChatState>()((set, get) => ({
   rooms: [],
+  groups: [],
   activeRoomId: null,
   messages: {},
   members: {},
@@ -75,11 +84,56 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     try {
       const { rooms } = await apiClient.rooms();
       set({ rooms, loadingRooms: false });
+      // 分组跟房间一起刷新：侧栏分堆要用它
+      void get()
+        .loadGroups()
+        .catch((err) => log.warn('加载分组失败', err));
       return rooms;
     } catch (err) {
       set({ loadingRooms: false, error: err instanceof Error ? err.message : String(err) });
       throw err;
     }
+  },
+
+  loadGroups: async () => {
+    const { groups } = await apiClient.groups();
+    set({ groups });
+    return groups;
+  },
+
+  createGroup: async (name) => {
+    const { group } = await apiClient.createGroup(name);
+    // 服务端会把房间挂到分组上，这里把房间摘要里的 groupId 也一起对齐
+    set((state) => ({ groups: [...state.groups, group].sort((a, b) => a.sort - b.sort || a.createdAt - b.createdAt) }));
+    await get().loadGroups();
+    log.action('新建分组', name);
+    return group;
+  },
+
+  renameGroup: async (id, name) => {
+    await apiClient.patchGroup(id, { name });
+    await get().loadGroups();
+  },
+
+  deleteGroup: async (id) => {
+    const res = await apiClient.deleteGroup(id);
+    await Promise.all([get().loadGroups(), get().loadRooms()]);
+    log.action('删除分组', `${id}（${res.movedRooms} 个房间回到未分组）`);
+    return { movedRooms: res.movedRooms };
+  },
+
+  moveGroup: async (id, sort) => {
+    await apiClient.patchGroup(id, { sort });
+    await get().loadGroups();
+  },
+
+  /** 把房间移到某个分组（groupId=null 表示移出分组） */
+  moveRoomToGroup: async (roomId, groupId) => {
+    await apiClient.patchRoom(roomId, { groupId });
+    set((state) => ({
+      rooms: state.rooms.map((r) => (r.id === roomId ? { ...r, groupId } : r)),
+    }));
+    await get().loadGroups();
   },
 
   openRoom: async (roomId) => {
@@ -394,6 +448,14 @@ export const useChatStore = create<ChatState>()((set, get) => ({
           .catch((err) => log.warn('刷新房间失败', err));
         break;
       }
+      /* 别人改了分组（新建/改名/删除/把房间挪走）：本端刷新一次，侧栏立刻跟上 */
+      case 'group.update': {
+        void get()
+          .loadGroups()
+          .then(() => get().loadRooms())
+          .catch((err) => log.warn('刷新分组失败', err));
+        break;
+      }
       /* 新建房间：别人把你拉进新群时，直接出现在你的房间列表里 */
       case 'room.created': {
         const room = event.data as RoomSummary;
@@ -420,6 +482,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   reset: () =>
     set({
       rooms: [],
+      groups: [],
       activeRoomId: null,
       messages: {},
       members: {},

@@ -197,11 +197,15 @@ curl -s -X POST "$BASE/api/rooms/<房间>/messages" -H "Authorization: Bearer $T
 | POST | `/api/rooms` 🔒 | 建房。body: `{name, topic?, members?:[tag], meta?}` |
 | POST | `/api/rooms/join` 🔒 | **凭邀请码加入**。body: `{code}` → `{ok, alreadyMember, room}` |
 | GET | `/api/rooms/:room` 🔒 | 房间详情（成员列表 + 文件列表） |
-| PATCH | `/api/rooms/:room` 🔒 | 改房间名/主题/meta |
+| PATCH | `/api/rooms/:room` 🔒 | 改房间名/主题/meta；`{groupId}` 把房间挪进分组（`null`/`""` = 移出分组，分组不存在会 404） |
 | DELETE | `/api/rooms/:room` 🔒 | **解散房间**：群主可解散自己建的房间，管理员可解散任意房间。默认彻底清除——成员关系、消息、AI 运行记录，以及 `data/files/<房间>/` 里的共享文件；加 `?keepFiles=1` 只删房间与聊天记录、文件留在磁盘上。返回 `{deleted:{members,messages,files,runs,diskFiles},freedBytes,filesDir,filesKept,hint}` |
 | POST | `/api/rooms/:room/members` 🔒 | 把已有成员拉进房间。body: `{tag}` |
 | DELETE | `/api/rooms/:room/members/:tag` 🔒 | 移出房间（自己或管理员） |
 | POST | `/api/rooms/:room/code/rotate` 🔒 | 重置邀请码（群主或管理员），旧码立即失效 |
+| GET | `/api/groups` 🔒 | **群聊分组列表**：`{groups:[{id,name,sort,roomIds}], ungrouped:[roomId]}`（只列你看得见的房间） |
+| POST | `/api/groups` 🔒 | 新建分组。body: `{name}` → `{group}` |
+| PATCH | `/api/groups/:id` 🔒 | 分组改名 / 调顺序。body: `{name?, sort?}`（限分组创建者或管理员） |
+| DELETE | `/api/groups/:id` 🔒 | 删分组（限创建者或管理员）：**群不会被删**，里面的群回到「未分组」，返回 `{movedRooms}` |
 
 ### 消息
 

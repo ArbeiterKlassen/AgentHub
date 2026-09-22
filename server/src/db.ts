@@ -30,6 +30,16 @@ export interface RoomRow {
   created_at: number;
   /** 群聊邀请码：给人看/复制/手输的短码（新建房间时生成，可重置） */
   code: string;
+  /** 所属分组（room_groups.id）；null = 未分组 */
+  group_id: string | null;
+}
+
+export interface RoomGroupRow {
+  id: string;
+  name: string;
+  sort: number;
+  created_by: string | null;
+  created_at: number;
 }
 
 export interface MessageRow {
@@ -138,6 +148,15 @@ function migrate(d: DatabaseSync): void {
       code       TEXT
     );
 
+    /* 群聊分组（侧栏里的"文件夹"）：房间挂在分组上，所有人看到同一套分组 */
+    CREATE TABLE IF NOT EXISTS room_groups (
+      id         TEXT PRIMARY KEY,
+      name       TEXT NOT NULL,
+      sort       INTEGER NOT NULL DEFAULT 0,
+      created_by TEXT,
+      created_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS room_members (
       room_id   TEXT NOT NULL,
       tag       TEXT NOT NULL,
@@ -237,6 +256,12 @@ function migrate(d: DatabaseSync): void {
   }
   if (!fileCols.some((c) => c.name === 'previous_id')) {
     d.exec('ALTER TABLE files ADD COLUMN previous_id TEXT');
+  }
+
+  // 老库补房间分组列
+  const roomCols = d.prepare('PRAGMA table_info(rooms)').all() as unknown as Array<{ name: string }>;
+  if (!roomCols.some((c) => c.name === 'group_id')) {
+    d.exec('ALTER TABLE rooms ADD COLUMN group_id TEXT');
   }
 }
 
@@ -438,7 +463,7 @@ export function listRooms(): RoomRow[] {
 }
 
 export function updateRoom(id: string, patch: Record<string, unknown>): void {
-  const allowed = ['name', 'topic', 'meta'];
+  const allowed = ['name', 'topic', 'meta', 'group_id'];
   const keys = Object.keys(patch).filter((k) => allowed.includes(k));
   if (!keys.length) return;
   getDb()
@@ -452,6 +477,51 @@ export function deleteRoom(id: string): void {
   d.prepare('DELETE FROM messages WHERE room_id = ?').run(id);
   d.prepare('DELETE FROM files WHERE room_id = ?').run(id);
   d.prepare('DELETE FROM rooms WHERE id = ?').run(id);
+}
+
+/* ------------------------------ 群聊分组 ------------------------------ */
+
+export function listRoomGroups(): RoomGroupRow[] {
+  return getDb()
+    .prepare('SELECT * FROM room_groups ORDER BY sort ASC, created_at ASC')
+    .all() as unknown as RoomGroupRow[];
+}
+
+export function getRoomGroup(id: string): RoomGroupRow | undefined {
+  return getDb().prepare('SELECT * FROM room_groups WHERE id = ?').get(id) as RoomGroupRow | undefined;
+}
+
+export function insertRoomGroup(row: RoomGroupRow): void {
+  getDb()
+    .prepare('INSERT INTO room_groups (id, name, sort, created_by, created_at) VALUES (?,?,?,?,?)')
+    .run(row.id, row.name, row.sort, row.created_by, row.created_at);
+}
+
+export function updateRoomGroup(id: string, patch: { name?: string; sort?: number }): void {
+  const keys = Object.keys(patch).filter((k) => patch[k as 'name' | 'sort'] !== undefined);
+  if (!keys.length) return;
+  getDb()
+    .prepare(`UPDATE room_groups SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`)
+    .run(...keys.map((k) => patch[k as 'name' | 'sort'] as string | number), id);
+}
+
+export function nextGroupSort(): number {
+  const row = getDb().prepare('SELECT MAX(sort) AS n FROM room_groups').get() as { n: number | null } | undefined;
+  return Number(row?.n ?? 0) + 1;
+}
+
+/** 删除分组：里面的房间变成「未分组」，房间本身不受影响 */
+export function deleteRoomGroup(id: string): number {
+  const d = getDb();
+  const moved = d.prepare('UPDATE rooms SET group_id = NULL WHERE group_id = ?').run(id);
+  d.prepare('DELETE FROM room_groups WHERE id = ?').run(id);
+  return Number(moved.changes ?? 0);
+}
+
+export function listRoomsInGroup(groupId: string): string[] {
+  return (getDb().prepare('SELECT id FROM rooms WHERE group_id = ? ORDER BY created_at ASC').all(groupId) as unknown as Array<{
+    id: string;
+  }>).map((r) => r.id);
 }
 
 export function addRoomMember(roomId: string, tag: string, role = 'member'): void {

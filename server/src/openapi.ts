@@ -357,6 +357,78 @@ export function openapiSpec(): Record<string, unknown> {
           },
         },
       },
+      '/api/groups': {
+        get: {
+          tags: ['房间'],
+          summary: '群聊分组列表',
+          description:
+            '分组是**房间级属性、所有人共享**（侧栏里的"文件夹"）。只列出调用者看得见的房间：\n' +
+            '普通成员看到自己加入的群，管理员看到全实例的群。',
+          responses: {
+            200: jsonResponse({
+              type: 'object',
+              properties: {
+                groups: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      id: { type: 'string' },
+                      name: { type: 'string' },
+                      sort: { type: 'integer' },
+                      createdBy: { type: ['string', 'null'] },
+                      createdAt: { type: 'integer' },
+                      roomIds: { type: 'array', items: { type: 'string' } },
+                    },
+                  },
+                },
+                ungrouped: { type: 'array', items: { type: 'string' }, description: '没进任何分组的房间 id' },
+              },
+            }),
+            ...errorResponses(),
+          },
+        },
+        post: {
+          tags: ['房间'],
+          summary: '新建分组（任何登录用户都能建）',
+          requestBody: jsonBody({
+            type: 'object',
+            properties: { name: { type: 'string', example: '数学建模' } },
+            required: ['name'],
+          }),
+          responses: {
+            201: jsonResponse({ type: 'object', properties: { group: { type: 'object' } } }),
+            ...errorResponses(),
+          },
+        },
+      },
+      '/api/groups/{id}': {
+        patch: {
+          tags: ['房间'],
+          summary: '分组改名 / 调整顺序（分组创建者或管理员）',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: jsonBody({
+            type: 'object',
+            properties: { name: { type: 'string' }, sort: { type: 'integer' } },
+          }),
+          responses: {
+            200: jsonResponse({ type: 'object', properties: { group: { type: 'object' } } }),
+            ...errorResponses(),
+          },
+        },
+        delete: {
+          tags: ['房间'],
+          summary: '删除分组（分组创建者或管理员）：群不会被删，回到「未分组」',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: {
+            200: jsonResponse({
+              type: 'object',
+              properties: { ok: { type: 'boolean' }, removed: { type: 'string' }, movedRooms: { type: 'integer' } },
+            }),
+            ...errorResponses(),
+          },
+        },
+      },
       '/api/rooms/join': {
         post: {
           tags: ['房间'],
@@ -405,6 +477,10 @@ export function openapiSpec(): Record<string, unknown> {
             properties: {
               name: { type: 'string' },
               topic: { type: 'string' },
+              groupId: {
+                type: ['string', 'null'],
+                description: '把房间挪进分组（传 null 或空串表示移出分组；分组不存在会返回 404）',
+              },
               meta: { type: 'object', description: '房间配置：maxHops / maxTurnsPerChain / contextLines / contextMaxChars 等' },
             },
           }),

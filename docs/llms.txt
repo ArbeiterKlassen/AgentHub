@@ -38,6 +38,9 @@ POST /api/register            注册（返回 token）
 POST /api/login               用 {tag, token} 登录
 GET  /api/me                  我的身份与房间
 GET  /api/rooms               我加入的房间（含邀请码 code）
+GET  /api/groups              群聊分组（侧栏分堆）：{groups:[{id,name,sort,roomIds}], ungrouped:[roomId]}
+POST /api/groups {"name":"项目A"}          新建分组；PATCH /api/groups/<id> 改名/排序；DELETE /api/groups/<id> 删分组（群回到未分组）
+PATCH /api/rooms/<房间> {"groupId":"g_xxx"}  把房间挪进分组（"groupId":null 移出）
 POST /api/rooms/join          凭邀请码入群
 GET  /api/rooms/<房间>/messages?limit=50&before=&after=&search=
      （搜索参数 search 与 q 都认；?excludeSelf=1 只取别人的发言）

@@ -14,33 +14,41 @@ import {
   getMessage,
   getRun,
   getReadCursor,
+  getRoomGroup,
   insertRoom,
+  insertRoomGroup,
   isRoomMember,
   listMembers,
   listMentionsFor,
   listMessages,
   listRulingMessages,
   listRooms,
+  listRoomGroups,
+  listRoomsInGroup,
   listRoomMemberTags,
   listRuns,
   maxMessageId,
   memberMessageCount,
   memberRoomCount,
   newId,
+  nextGroupSort,
   now,
   parseJson,
   removeRoomMember,
   rotateRoomCode,
   roomMessageCount,
   setReadCursor,
+  deleteRoomGroup,
   purgeRoomRows,
   roomArtifactCounts,
   touchMember,
   updateMember,
   updateRoom,
+  updateRoomGroup,
   usageSummary,
   type MemberRow,
   type MessageRow,
+  type RoomGroupRow,
   type RoomRow,
 } from './db.js';
 import {
@@ -497,6 +505,8 @@ export function buildApiRouter(): Router {
       topic: room.topic,
       // 群聊唯一识别码（邀请码）：给成员显示/复制，别人用它加入
       code: room.code,
+      /** 所属分组 id（null = 未分组）：侧栏按它把房间分堆 */
+      groupId: room.group_id ?? null,
       meta: { ...DEFAULT_ROOM_META, ...parseJson<Record<string, unknown>>(room.meta, {}) },
       createdBy: room.created_by,
       createdAt: room.created_at,
@@ -545,6 +555,7 @@ export function buildApiRouter(): Router {
         meta: JSON.stringify({ ...DEFAULT_ROOM_META, ...(body.meta ?? {}) }),
         created_at: now(),
         code: generateRoomCode(),
+        group_id: null,
       };
       const db = getDb();
       // 邀请码极小概率撞车，撞了就换一个再插
@@ -592,6 +603,109 @@ export function buildApiRouter(): Router {
           })),
         files: listRoomFiles(room.id, originOf(req)),
       };
+    }),
+  );
+
+  /* ------------------------------ 群聊分组 ------------------------------ */
+
+  /**
+   * 分组列表：房间挂在分组上（房间级属性，所有人看到同一套分组）。
+   * 只列当前用户能看到的房间——普通成员看到的是自己加入的群，管理员能看到全实例的群。
+   */
+  api.get(
+    '/groups',
+    wrap((req) => {
+      const me = requireAuth(req);
+      const visible = new Set(
+        listRooms()
+          .filter((room) => isRoomMember(room.id, me.tag) || me.role === 'admin')
+          .map((room) => room.id),
+      );
+      const groups = listRoomGroups().map((g) => ({
+        id: g.id,
+        name: g.name,
+        sort: g.sort,
+        createdBy: g.created_by,
+        createdAt: g.created_at,
+        roomIds: listRoomsInGroup(g.id).filter((id) => visible.has(id)),
+      }));
+      const accounted = new Set(groups.flatMap((g) => g.roomIds));
+      const ungrouped = [...visible].filter((id) => {
+        const room = findRoom(id);
+        if (!room) return false;
+        return (!room.group_id || !getRoomGroup(room.group_id)) && !accounted.has(id);
+      });
+      return { groups, ungrouped };
+    }),
+  );
+
+  /** 建分组：任何登录用户都能建；改名/删除限创建者与管理员 */
+  api.post(
+    '/groups',
+    wrap((req) => {
+      const me = requireAuth(req);
+      const name = String((req.body as { name?: string })?.name ?? '')
+        .trim()
+        .slice(0, 40);
+      if (!name) throw new HttpError(400, '缺少分组名');
+      const row: RoomGroupRow = {
+        id: newId('g'),
+        name,
+        sort: nextGroupSort(),
+        created_by: me.tag,
+        created_at: now(),
+      };
+      insertRoomGroup(row);
+      broadcast({ type: 'group.update', data: { id: row.id, action: 'created' }, ts: Date.now() });
+      return {
+        group: { id: row.id, name: row.name, sort: row.sort, createdBy: row.created_by, createdAt: row.created_at, roomIds: [] },
+      };
+    }),
+  );
+
+  /** 分组改名 / 调整顺序（创建者或管理员） */
+  api.patch(
+    '/groups/:id',
+    wrap((req) => {
+      const me = requireAuth(req);
+      const group = getRoomGroup(req.params.id);
+      if (!group) throw new HttpError(404, '分组不存在');
+      if (group.created_by !== me.tag && me.role !== 'admin') {
+        throw new HttpError(403, '只有分组创建者或管理员可以修改分组');
+      }
+      const body = (req.body ?? {}) as { name?: string; sort?: number };
+      const patch: { name?: string; sort?: number } = {};
+      if (typeof body.name === 'string' && body.name.trim()) patch.name = body.name.trim().slice(0, 40);
+      if (Number.isFinite(Number(body.sort))) patch.sort = Number(body.sort);
+      updateRoomGroup(group.id, patch);
+      broadcast({ type: 'group.update', data: { id: group.id, action: 'updated' }, ts: Date.now() });
+      const after = getRoomGroup(group.id)!;
+      return {
+        group: {
+          id: after.id,
+          name: after.name,
+          sort: after.sort,
+          createdBy: after.created_by,
+          createdAt: after.created_at,
+          roomIds: listRoomsInGroup(after.id),
+        },
+      };
+    }),
+  );
+
+  /** 删分组：里面的房间回到「未分组」，房间本身不动 */
+  api.delete(
+    '/groups/:id',
+    wrap((req) => {
+      const me = requireAuth(req);
+      const group = getRoomGroup(req.params.id);
+      if (!group) throw new HttpError(404, '分组不存在');
+      if (group.created_by !== me.tag && me.role !== 'admin') {
+        throw new HttpError(403, '只有分组创建者或管理员可以删除分组');
+      }
+      const movedRooms = deleteRoomGroup(group.id);
+      broadcast({ type: 'group.update', data: { id: group.id, action: 'deleted' }, ts: Date.now() });
+      return { ok: true, removed: group.id, movedRooms };
     }),
   );
 
@@ -650,11 +764,22 @@ export function buildApiRouter(): Router {
     wrap((req) => {
       const room = resolveRoom(req.params.room);
       const me = requireRoomMember(req, room.id);
-      const body = (req.body ?? {}) as { name?: string; topic?: string; meta?: Record<string, unknown> };
+      const body = (req.body ?? {}) as {
+        name?: string;
+        topic?: string;
+        meta?: Record<string, unknown>;
+        groupId?: string | null;
+      };
       const patch: Record<string, unknown> = {};
       if (typeof body.name === 'string' && body.name.trim()) patch.name = body.name.trim().slice(0, 40);
       if (typeof body.topic === 'string') patch.topic = body.topic.slice(0, 200);
       if (body.meta) patch.meta = JSON.stringify({ ...roomMetaOf(room), ...body.meta });
+      // 移动到分组：groupId 传 null/'' 表示移出分组；分组不存在就直接报错，别静默忽略
+      if (body.groupId !== undefined) {
+        const target = body.groupId === null || body.groupId === '' ? null : String(body.groupId);
+        if (target && !getRoomGroup(target)) throw new HttpError(404, `分组 ${target} 不存在`);
+        patch.group_id = target;
+      }
       updateRoom(room.id, patch);
       systemMessage(room.id, `@${me.tag} 更新了房间信息`);
       return { room: roomSummary(findRoom(room.id)!, me.tag, req) };
