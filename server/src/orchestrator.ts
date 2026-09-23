@@ -528,13 +528,18 @@ async function executeJob(job: Job): Promise<void> {
       `⏳ @${agent.tag}（${agent.nickname}）仍在处理（${label}，已 ${minutes} 分钟）。` +
       `它在闷头做长活时不会自动发言，如需中止：发送 /stop（或在 AI 面板点「全部停止」）。`;
     const meta = { runId, agentTag: agent.tag, chainId, level: 'info', kind: 'run.progress' };
+    const progressMeta = {
+      ...meta,
+      i18nKind: 'run.progress',
+      i18nParams: { tag: agent.tag, nickname: agent.nickname, label, minutes },
+    };
     if (progressMsgId === null) {
       // 第一次：发一条心跳（房间可能已被解散，那就什么都别做）
-      const msg = safeSystemMessage(room.id, text, meta);
+      const msg = safeSystemMessage(room.id, text, progressMeta);
       if (msg) progressMsgId = msg.id;
     } else {
       // 之后：原地改写这一条，而不是每 2 分钟刷一条新的（系统消息曾经占全群 25%）
-      updateSystemMessage(progressMsgId, text, meta);
+      updateSystemMessage(progressMsgId, text, progressMeta);
     }
   }, ROOM_DEFAULTS.statusTickMs);
   heartbeat.unref?.();
@@ -572,7 +577,15 @@ async function executeJob(job: Job): Promise<void> {
       safeSystemMessage(
         room.id,
         `↻ @${agent.tag} 首次调用失败（${run.error ?? '未知错误'}），2 秒后自动重试一次…`,
-        { runId, agentTag: agent.tag, chainId, level: 'warn', kind: 'run.retry' },
+        {
+          runId,
+          agentTag: agent.tag,
+          chainId,
+          level: 'warn',
+          kind: 'run.retry',
+          i18nKind: 'run.retry',
+          i18nParams: { tag: agent.tag, error: run.error ?? '未知错误' },
+        },
       );
       await new Promise((r) => setTimeout(r, 2000));
       const retry = await runAdapter(runOptions);
@@ -640,7 +653,21 @@ async function executeJob(job: Job): Promise<void> {
           `建议：再 @ 它一次并明确「只做哪一步」，或让它先给结论再展开。`
         : `⚠️ @${agent.tag}（${agent.nickname}）调用 ${adapter.label} 失败：${run.error ?? '未知错误'}\n` +
           `可在「Agent 控制台」查看命令：${run.command}`),
-      { runId, agentTag: agent.tag, level: 'error' },
+      {
+        runId,
+        agentTag: agent.tag,
+        level: 'error',
+        i18nKind: timedOut ? 'run.timeout' : 'run.error',
+        i18nParams: timedOut
+          ? { tag: agent.tag, nickname: agent.nickname, minutes: Math.round(prepared.timeoutMs / 60000) }
+          : {
+              tag: agent.tag,
+              nickname: agent.nickname,
+              label: adapter.label,
+              error: run.error ?? '未知错误',
+              command: run.command,
+            },
+      },
     );
     return;
   }
@@ -652,6 +679,8 @@ async function executeJob(job: Job): Promise<void> {
       runId,
       agentTag: agent.tag,
       level: 'warn',
+      i18nKind: 'run.empty',
+      i18nParams: { tag: agent.tag },
     });
     return;
   }
@@ -677,7 +706,14 @@ async function executeJob(job: Job): Promise<void> {
     systemMessage(
       room.id,
       `⏭ 已丢弃 @${agent.tag} 的迟到回帖（讨论链已停止，消耗 ${Math.round(run.durationMs / 1000)}s）`,
-      { runId, agentTag: agent.tag, chainId, level: 'warn' },
+      {
+        runId,
+        agentTag: agent.tag,
+        chainId,
+        level: 'warn',
+        i18nKind: 'run.dropped',
+        i18nParams: { tag: agent.tag, seconds: Math.round(run.durationMs / 1000) },
+      },
     );
     return;
   }
@@ -782,7 +818,7 @@ export function routeMessage(row: MessageRow): number {
         systemMessage(
           room.id,
           `⏭ 新消息优先，已跳过 ${dropped} 个排队中的任务（正在生成的回复仍会保留，稍后带「回复较早消息」标记发出）`,
-          { kind: 'chain.interrupt', level: 'info' },
+          { kind: 'chain.interrupt', level: 'info', i18nKind: 'chain.interrupt', i18nParams: { n: dropped } },
         );
       }
     }
@@ -989,12 +1025,15 @@ export async function startDiscussion(opts: DiscussionOptions): Promise<{ chainI
 
 export function pauseRoom(roomId: string): void {
   pausedRooms.add(roomId);
-  systemMessage(roomId, '⏸ 已暂停本房间的 AI 自动接力（发送 /resume 恢复）', { kind: 'control' });
+  systemMessage(roomId, '⏸ 已暂停本房间的 AI 自动接力（发送 /resume 恢复）', {
+    kind: 'control',
+    i18nKind: 'control.pause',
+  });
 }
 
 export function resumeRoom(roomId: string): void {
   pausedRooms.delete(roomId);
-  systemMessage(roomId, '▶️ 已恢复本房间的 AI 自动接力', { kind: 'control' });
+  systemMessage(roomId, '▶️ 已恢复本房间的 AI 自动接力', { kind: 'control', i18nKind: 'control.resume' });
 }
 
 export function stopRoom(roomId: string): number {
@@ -1009,7 +1048,11 @@ export function stopRoom(roomId: string): number {
     if (chain.roomId === roomId) chain.stopped = true;
   }
   pausedRooms.add(roomId);
-  systemMessage(roomId, `⏹ 已停止排队中的 AI 任务（${dropped} 个）并暂停自动接力`, { kind: 'control' });
+  systemMessage(roomId, `⏹ 已停止排队中的 AI 任务（${dropped} 个）并暂停自动接力`, {
+    kind: 'control',
+    i18nKind: 'control.stop',
+    i18nParams: { n: dropped },
+  });
   return dropped;
 }
 

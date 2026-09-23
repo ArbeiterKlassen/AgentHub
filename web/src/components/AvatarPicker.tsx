@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { Loader2, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AVATAR_PRESETS, AVATAR_SIZE, compressAvatarToDataUrl, isImageAvatar } from '@/lib/avatar';
+import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 
 interface AvatarPickerProps {
@@ -11,6 +12,7 @@ interface AvatarPickerProps {
 }
 
 export function AvatarPicker({ value, onChange, className }: AvatarPickerProps) {
+  const { t } = useI18n();
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +36,7 @@ export function AvatarPicker({ value, onChange, className }: AvatarPickerProps) 
       <div className="flex items-center gap-3">
         <span className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full border bg-muted text-lg">
           {isImageAvatar(value) ? (
-            <img src={value} alt="头像预览" className="h-full w-full object-cover" />
+            <img src={value} alt={t('avatar.preview')} className="h-full w-full object-cover" />
           ) : (
             value || '🙂'
           )}
@@ -52,11 +54,9 @@ export function AvatarPicker({ value, onChange, className }: AvatarPickerProps) 
             ) : (
               <Upload className="mr-1 h-3.5 w-3.5" />
             )}
-            {busy ? '处理中…' : '上传本地头像'}
+            {busy ? t('avatar.processing') : t('avatar.upload')}
           </Button>
-          <p className="text-[11px] text-muted-foreground">
-            自动居中裁剪并压缩为 {AVATAR_SIZE}×{AVATAR_SIZE} 像素
-          </p>
+          <p className="text-[11px] text-muted-foreground">{t('avatar.hint', { n: AVATAR_SIZE })}</p>
         </div>
         <input
           ref={fileRef}
@@ -71,7 +71,7 @@ export function AvatarPicker({ value, onChange, className }: AvatarPickerProps) 
           <button
             key={emoji}
             type="button"
-            title={`使用 ${emoji}`}
+            title={t('avatar.use', { emoji })}
             onClick={() => onChange(emoji)}
             className={cn(
               'flex h-7 w-7 items-center justify-center rounded-full border text-base transition-colors',

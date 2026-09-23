@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const argv = process.argv.slice(2);
@@ -25,7 +25,26 @@ const flag = (name, fallback = null) => {
   return next && !next.startsWith('--') ? next : true;
 };
 
-const PORT = Number(flag('port', 9227));
+/**
+ * 端口策略：手动起浏览器时用 9227；带 --launch 时自动挑一个空闲端口。
+ * 之前固定 9227 会让「上一次没关掉的 headless 浏览器」占住端口，
+ * 后来者连上去的其实是旧实例，于是出现莫名其妙的「登录页渲染超时」。
+ */
+const LAUNCH = Boolean(flag('launch'));
+async function pickFreePort(start = 9300) {
+  const net = await import('node:net');
+  for (let p = start; p < start + 80; p += 1) {
+    const free = await new Promise((resolve) => {
+      const srv = net.createServer();
+      srv.once('error', () => resolve(false));
+      srv.once('listening', () => srv.close(() => resolve(true)));
+      srv.listen(p, '127.0.0.1');
+    });
+    if (free) return p;
+  }
+  throw new Error(`从 ${start} 起找不到空闲的调试端口`);
+}
+const PORT = Number(flag('port', 0)) || (LAUNCH ? await pickFreePort() : 9227);
 const APP = String(flag('app', 'http://localhost:5173'));
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SHOT_DIR = path.join(REPO, 'docs', 'screenshots');
@@ -84,8 +103,19 @@ function createClient(wsUrl) {
   return { ws, send, ready };
 }
 
+/** --launch 起的浏览器在收尾时关掉，免得攒一堆实例把端口占死 */
+let launchedBrowserPid = null;
+function killLaunchedBrowser() {
+  if (!launchedBrowserPid) return;
+  try {
+    spawnSync('taskkill', ['/PID', String(launchedBrowserPid), '/T', '/F'], { stdio: 'ignore' });
+  } catch {
+    /* 关不掉就算了，不影响结论 */
+  }
+}
+
 async function main() {
-  if (flag('launch')) {
+  if (LAUNCH) {
     const browser =
       [
         'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
@@ -94,7 +124,7 @@ async function main() {
       ].find((p) => p && fs.existsSync(p)) ?? '';
     if (!browser) throw new Error('没找到 Edge/Chrome，请手动启动带调试端口的浏览器');
     const profile = path.join(process.env.TEMP ?? '.', `agenthub-ui-${RUN}`);
-    spawn(
+    const child = spawn(
       browser,
       [
         `--remote-debugging-port=${PORT}`,
@@ -107,7 +137,9 @@ async function main() {
         'about:blank',
       ],
       { detached: true, stdio: 'ignore', windowsHide: true },
-    ).unref();
+    );
+    child.unref();
+    launchedBrowserPid = child.pid ?? null;
     await sleep(2500);
   }
 
@@ -402,6 +434,7 @@ try {
 } catch (err) {
   check(`执行中断：${err.message}`, false);
 }
+killLaunchedBrowser();
 
 const failed = results.filter((r) => !r.pass);
 

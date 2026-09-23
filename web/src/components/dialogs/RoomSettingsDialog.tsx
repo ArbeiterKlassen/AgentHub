@@ -3,6 +3,7 @@ import { Loader2, Save, Trash2 } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 import { useChatStore } from '@/stores/chat';
 import { useSessionStore } from '@/stores/session';
+import { useI18n } from '@/lib/i18n';
 import { useUiStore } from '@/stores/ui';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -59,6 +60,7 @@ function fromRoom(room: RoomSummary): FormState {
  * 所以做成房间级可调——长讨论的群可以放大，闲聊群可以调小省钱。
  */
 export function RoomSettingsDialog({ open, onOpenChange, room }: Props) {
+  const { t } = useI18n();
   const [form, setForm] = useState<FormState | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmDissolve, setConfirmDissolve] = useState(false);
@@ -100,7 +102,7 @@ export function RoomSettingsDialog({ open, onOpenChange, room }: Props) {
         },
       });
       await refreshRoom(room.id);
-      pushToast('房间设置已保存（下一次 AI 调用就按新预算走）', 'success');
+      pushToast(t('dialog.roomSettings.saved'), 'success');
       onOpenChange(false);
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error');
@@ -116,7 +118,7 @@ export function RoomSettingsDialog({ open, onOpenChange, room }: Props) {
     setDissolving(true);
     try {
       const res = await dissolveRoom(room.id, { keepFiles });
-      pushToast(`房间「${res.name}」已解散：${res.hint}`, 'success');
+      pushToast(t('dialog.roomSettings.dissolved', { name: res.name, hint: res.hint }), 'success');
       onOpenChange(false);
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error');
@@ -148,37 +150,37 @@ export function RoomSettingsDialog({ open, onOpenChange, room }: Props) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <button type="button" className="absolute inset-0" aria-label="关闭" onClick={() => onOpenChange(false)} />
+      <button type="button" className="absolute inset-0" aria-label={t('common.close')} onClick={() => onOpenChange(false)} />
       <div className="thin-scrollbar relative max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-xl border bg-background p-4 shadow-xl">
-        <h3 className="text-base font-semibold">房间设置</h3>
-        <p className="mt-0.5 text-xs text-muted-foreground">改的是这个房间里所有 AI 共用的参数。</p>
+        <h3 className="text-base font-semibold">{t('dialog.roomSettings.title')}</h3>
+        <p className="mt-0.5 text-xs text-muted-foreground">{t('dialog.roomSettings.subtitle')}</p>
 
         <div className="mt-3 space-y-3">
           <div className="space-y-1">
-            <Label className="text-xs">群名</Label>
+            <Label className="text-xs">{t('dialog.roomSettings.name')}</Label>
             <Input className="h-8" value={form.name} onChange={(e) => setField('name', e.target.value)} />
           </div>
           <div className="space-y-1">
-            <Label className="text-xs">群主题</Label>
+            <Label className="text-xs">{t('dialog.roomSettings.topic')}</Label>
             <Input
               className="h-8"
               value={form.topic}
-              placeholder="一句话说明这个群在做什么"
+              placeholder={t('dialog.roomSettings.topicPlaceholder')}
               onChange={(e) => setField('topic', e.target.value)}
             />
           </div>
           {/* Radix Select 不接受空字符串作为 value，所以用 __none__ 代表「未分组」 */}
           <div className="space-y-1">
-            <Label className="text-xs">所属分组</Label>
+            <Label className="text-xs">{t('dialog.roomSettings.group')}</Label>
             <Select
               value={form.groupId ?? '__none__'}
               onValueChange={(value) => setField('groupId', value === '__none__' ? null : value)}
             >
               <SelectTrigger className="h-8">
-                <SelectValue placeholder="未分组" />
+                <SelectValue placeholder={t('rooms.ungrouped')} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="__none__">未分组</SelectItem>
+                <SelectItem value="__none__">{t('rooms.ungrouped')}</SelectItem>
                 {groups.map((g) => (
                   <SelectItem key={g.id} value={g.id}>
                     {g.name}
@@ -186,23 +188,23 @@ export function RoomSettingsDialog({ open, onOpenChange, room }: Props) {
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-[11px] text-muted-foreground">分组是所有人共享的；要新建分组去侧栏的文件夹图标。</p>
+            <p className="text-[11px] text-muted-foreground">{t('dialog.roomSettings.groupHint')}</p>
           </div>
 
           <div className="rounded-lg border bg-muted/20 p-3">
-            <div className="text-xs font-medium">上下文预算</div>
+            <div className="text-xs font-medium">{t('dialog.roomSettings.contextSection')}</div>
             <div className="mt-2 space-y-3">
-              {row('进提示词的历史条数', 'contextLines', '默认 24 条。太长会把 CLI 的上下文顶爆，太短 AI 会忘事。', {
+              {row(t('dialog.roomSettings.contextLines'), 'contextLines', t('dialog.roomSettings.contextLinesHint'), {
                 min: 1,
                 max: 200,
               })}
               {row(
-                '历史正文字符预算',
+                t('dialog.roomSettings.contextChars'),
                 'contextMaxChars',
-                '默认 6000 字符。超出就从最旧的消息开始丢，并在提示词里说明「更早的 N 条已省略」。',
+                t('dialog.roomSettings.contextCharsHint'),
                 { min: 500, max: 200000, step: 500 },
               )}
-              {row('拉取历史消息条数', 'historyMessages', '默认 30 条（再按上面的预算截取）。', {
+              {row(t('dialog.roomSettings.historyMessages'), 'historyMessages', t('dialog.roomSettings.historyMessagesHint'), {
                 min: 1,
                 max: 200,
               })}
@@ -210,11 +212,16 @@ export function RoomSettingsDialog({ open, onOpenChange, room }: Props) {
           </div>
 
           <div className="rounded-lg border bg-muted/20 p-3">
-            <div className="text-xs font-medium">接力与心跳</div>
+            <div className="text-xs font-medium">{t('dialog.roomSettings.relaySection')}</div>
             <div className="mt-2 grid grid-cols-2 gap-3">
-              {row('最大接力跳数', 'maxHops', '默认 6 跳。', { min: 1, max: 50 })}
-              {row('单链发言上限', 'maxTurnsPerChain', '默认 12 条。', { min: 1, max: 100 })}
-              {row('长任务心跳间隔（分钟）', 'progressMinutes', '默认 2 分钟；0 = 不发进度提示。', {
+              {row(t('dialog.roomSettings.maxHops'), 'maxHops', t('dialog.roomSettings.maxHopsHint'), { min: 1, max: 50 })}
+              {row(
+                t('dialog.roomSettings.maxTurns'),
+                'maxTurnsPerChain',
+                t('dialog.roomSettings.maxTurnsHint'),
+                { min: 1, max: 100 },
+              )}
+              {row(t('dialog.roomSettings.progress'), 'progressMinutes', t('dialog.roomSettings.progressHint'), {
                 min: 0,
                 max: 120,
               })}
@@ -226,16 +233,14 @@ export function RoomSettingsDialog({ open, onOpenChange, room }: Props) {
         <div className="mt-4 rounded-lg border border-destructive/40 bg-destructive/5 p-3">
           <div className="flex items-center gap-1.5 text-xs font-medium text-destructive">
             <Trash2 className="h-3.5 w-3.5" />
-            解散房间
+            {t('dialog.roomSettings.dissolve')}
           </div>
           <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-            群主可以解散自己建的房间，管理员可以解散任意房间。解散会一并清除这个房间的
-            <b>成员关系、{room.messageCount} 条聊天记录、AI 运行记录</b>，
-            共享文件区在磁盘上的文件默认也会删掉，<b>不可恢复</b>。
+            {t('dialog.roomSettings.dissolveHint', { n: room.messageCount })}
           </p>
           {!canDissolve ? (
             <p className="mt-2 text-[11px] text-muted-foreground">
-              你不是这个房间的创建者（@{room.createdBy ?? '-'}），所以不能解散它。
+              {t('dialog.roomSettings.notOwner', { tag: room.createdBy ?? '-' })}
             </p>
           ) : !confirmDissolve ? (
             <Button
@@ -245,7 +250,7 @@ export function RoomSettingsDialog({ open, onOpenChange, room }: Props) {
               onClick={() => setConfirmDissolve(true)}
             >
               <Trash2 className="mr-1 h-3.5 w-3.5" />
-              解散这个房间…
+              {t('dialog.roomSettings.dissolveButton')}
             </Button>
           ) : (
             <div className="mt-2 space-y-2 rounded border border-destructive/40 bg-background p-2">
@@ -257,18 +262,18 @@ export function RoomSettingsDialog({ open, onOpenChange, room }: Props) {
                   onChange={(e) => setKeepFiles(e.target.checked)}
                 />
                 <span>
-                  保留磁盘上的共享文件（只删房间与聊天记录）
+                  {t('dialog.roomSettings.keepFiles')}
                   <br />
-                  <span className="text-muted-foreground">勾上后文件会留在 data/files/&lt;房间&gt;/ 里，方便你自己留档。</span>
+                  <span className="text-muted-foreground">{t('dialog.roomSettings.keepFilesHint')}</span>
                 </span>
               </label>
               <div className="flex items-center gap-2">
                 <Button variant="destructive" size="sm" disabled={dissolving} onClick={() => void dissolve()}>
                   {dissolving ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-1 h-3.5 w-3.5" />}
-                  确认解散「{room.name}」
+                  {t('dialog.roomSettings.confirmDissolve', { name: room.name })}
                 </Button>
                 <Button variant="ghost" size="sm" disabled={dissolving} onClick={() => setConfirmDissolve(false)}>
-                  算了
+                  {t('dialog.roomSettings.cancelShort')}
                 </Button>
               </div>
             </div>
@@ -277,11 +282,11 @@ export function RoomSettingsDialog({ open, onOpenChange, room }: Props) {
 
         <div className="mt-4 flex justify-end gap-2">
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            取消
+            {t('common.cancel')}
           </Button>
           <Button onClick={() => void save()} disabled={saving}>
             {saving ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-1 h-3.5 w-3.5" />}
-            保存
+            {t('common.save')}
           </Button>
         </div>
       </div>

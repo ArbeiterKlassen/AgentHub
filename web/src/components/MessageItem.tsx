@@ -17,6 +17,8 @@ import { ImageAttachment } from '@/components/ImageAttachment';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn, copyText } from '@/lib/utils';
+import { useI18n } from '@/lib/i18n';
+import { localizedSystemText } from '@/lib/messageText';
 import { isImageFile } from '@/lib/fileKind';
 import { formatSize, formatTime, isAllMentionToken, splitMentions } from '@/lib/format';
 import { downloadUrl } from '@/lib/api';
@@ -55,6 +57,7 @@ function MentionText({ text, onMention }: { text: string; onMention: (tag: strin
 }
 
 export function MessageItem({ message, members, files, replyTo, onReply, onDelete }: MessageItemProps) {
+  const { t } = useI18n();
   const me = useSessionStore((s) => s.member);
   const server = useSessionStore((s) => s.server);
   const token = useSessionStore((s) => s.token);
@@ -68,6 +71,8 @@ export function MessageItem({ message, members, files, replyTo, onReply, onDelet
 
   if (isSystem) {
     const level = String(message.meta?.level ?? 'info');
+    // 系统消息按服务端给的模板 key 本地化，认不出就退回原文（见 lib/messageText.ts）
+    const localized = localizedSystemText(message);
     /**
      * 单行系统消息用胶囊形（rounded-full）好看，多行的就必须换成普通圆角：
      * border-radius:9999px 会被浏览器夹到「高度的一半」，于是 /help、/who 这种多行消息
@@ -85,7 +90,7 @@ export function MessageItem({ message, members, files, replyTo, onReply, onDelet
           )}
         >
           <Info className="mt-0.5 h-3 w-3 shrink-0" />
-          <span className="whitespace-pre-wrap break-words">{message.text}</span>
+          <span className="whitespace-pre-wrap break-words">{localized ?? message.text}</span>
         </div>
       </div>
     );
@@ -97,6 +102,11 @@ export function MessageItem({ message, members, files, replyTo, onReply, onDelet
 
   /** 文件被删掉后聊天里不再有可点的附件，给这条消息补一个「文件已删除」的说明 */
   const deletedFiles = (message.meta?.fileDeleted as string[] | undefined) ?? [];
+  /**
+   * 服务端生成的文件消息（type=file）也带模板 key，例如「📎 上传了文件 X」。
+   * 它走的是普通消息分支，所以这里同样按语言渲染；认不出 key 就显示原文。
+   */
+  const displayText = localizedSystemText(message) ?? message.text;
   /** 结构化载荷：机器之间交换数据用（有内容才显示那块折叠区） */
   const hasData = Boolean(message.data && Object.keys(message.data).length);
   const isRuling = String(message.data?.kind ?? '') === 'ruling';
@@ -124,16 +134,16 @@ export function MessageItem({ message, members, files, replyTo, onReply, onDelet
             </Badge>
           )}
           {message.hop > 0 && (
-            <span className="rounded bg-muted px-1 text-[10px]" title="在本次讨论里的接力跳数">
-              接力 {message.hop}
+          <span className="rounded bg-muted px-1 text-[10px]" title={t('message.hopTitle')}>
+            {t('message.hop', { n: message.hop })}
             </span>
           )}
           {Boolean(message.meta?.lateReply) && (
             <span
               className="rounded bg-amber-500/15 px-1 text-[10px] text-amber-700 dark:text-amber-400"
-              title="这条回复生成期间群里来了新消息，它是对更早那条消息的回应"
+              title={t('message.lateReplyTitle')}
             >
-              回复较早消息
+              {t('message.lateReply')}
             </span>
           )}
           <span>{formatTime(message.createdAt)}</span>
@@ -160,7 +170,7 @@ export function MessageItem({ message, members, files, replyTo, onReply, onDelet
               : 'bubble-other border bg-card text-card-foreground',
           )}
         >
-          <MentionText text={message.text} onMention={(tag) => insertToComposer(`@${tag} `)} />
+            <MentionText text={displayText} onMention={(tag) => insertToComposer(`@${tag} `)} />
         </div>
 
         {attachments.length > 0 && (
@@ -194,7 +204,7 @@ export function MessageItem({ message, members, files, replyTo, onReply, onDelet
         {deletedFiles.length > 0 && (
           <div className={cn('flex items-center gap-1 text-[11px] text-muted-foreground', isOwn && 'justify-end')}>
             <Trash2 className="h-3 w-3" />
-            附件已被删除（{deletedFiles.length} 个）
+            {t('message.filesDeleted', { n: deletedFiles.length })}
           </div>
         )}
 
@@ -202,7 +212,7 @@ export function MessageItem({ message, members, files, replyTo, onReply, onDelet
         {hasData && (
           <details className={cn('rounded-lg border bg-muted/30 px-2 py-1 text-[11px]', isOwn && 'text-right')}>
             <summary className="cursor-pointer select-none text-muted-foreground">
-              <span className="font-mono">{'{ }'}</span> 结构化数据
+              <span className="font-mono">{'{ }'}</span> {t('message.structuredData')}
               {isRuling && (
                 <span
                   className={cn(
@@ -212,7 +222,7 @@ export function MessageItem({ message, members, files, replyTo, onReply, onDelet
                       : 'bg-muted text-muted-foreground line-through',
                   )}
                 >
-                  裁定 · {rulingStatus === 'active' ? '生效中' : '已作废'}
+                  {t('message.ruling')} · {rulingStatus === 'active' ? t('message.rulingActive') : t('message.rulingSuperseded')}
                 </span>
               )}
             </summary>
@@ -231,11 +241,11 @@ export function MessageItem({ message, members, files, replyTo, onReply, onDelet
         >
           <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px]" onClick={() => void doCopy()}>
             {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-            复制
+              {t('message.copy')}
           </Button>
           <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px]" onClick={() => onReply(message)}>
             <CornerUpLeft className="h-3 w-3" />
-            引用
+              {t('message.quote')}
           </Button>
           {!isOwn && (
             <Button
@@ -245,7 +255,7 @@ export function MessageItem({ message, members, files, replyTo, onReply, onDelet
               onClick={() => insertToComposer(`@${message.senderTag} `)}
             >
               <AtSign className="h-3 w-3" />
-              回复 TA
+              {t('message.replyTo')}
             </Button>
           )}
           {(isOwn || me?.role === 'admin') && (
@@ -254,12 +264,12 @@ export function MessageItem({ message, members, files, replyTo, onReply, onDelet
               size="sm"
               className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-destructive"
               onClick={() => {
-                pushToast('已删除该消息', 'info');
+              pushToast(t('message.deleted'), 'info');
                 onDelete(message);
               }}
             >
               <Trash2 className="h-3 w-3" />
-              删除
+              {t('common.delete')}
             </Button>
           )}
         </div>

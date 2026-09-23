@@ -9,17 +9,18 @@ import { Avatar } from '@/components/Avatar';
 import { DiscussDialog } from '@/components/dialogs/DiscussDialog';
 import { cn } from '@/lib/utils';
 import { ALL_MENTION_ALIASES } from '@/lib/format';
+import { useI18n } from '@/lib/i18n';
 import { log } from '@/lib/logger';
 import type { Member } from '@/lib/types';
 
 const COMMANDS = [
-  { cmd: '/help', desc: '查看可用命令' },
-  { cmd: '/discuss ', desc: '发起多 AI 讨论，如 /discuss 架构评审 @codex-1 @claude-1 --rounds 2' },
-  { cmd: '/speak @', desc: '让某个 AI 主动发言' },
-  { cmd: '/pause', desc: '暂停本房间 AI 自动接力' },
-  { cmd: '/resume', desc: '恢复自动接力' },
-  { cmd: '/stop', desc: '清空排队任务并暂停' },
-  { cmd: '/who', desc: '查看房间成员' },
+  { cmd: '/help', descKey: 'composer.cmd.help' },
+  { cmd: '/discuss ', descKey: 'composer.cmd.discuss' },
+  { cmd: '/speak @', descKey: 'composer.cmd.speak' },
+  { cmd: '/pause', descKey: 'composer.cmd.pause' },
+  { cmd: '/resume', descKey: 'composer.cmd.resume' },
+  { cmd: '/stop', descKey: 'composer.cmd.stop' },
+  { cmd: '/who', descKey: 'composer.cmd.who' },
 ];
 
 interface ComposerProps {
@@ -39,6 +40,7 @@ interface MentionItem {
 }
 
 export function Composer({ roomId, members, replyTo, onClearReply }: ComposerProps) {
+  const { t } = useI18n();
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -71,8 +73,10 @@ export function Composer({ roomId, members, replyTo, onClearReply }: ComposerPro
       items.push({
         key: '__all__',
         tag: 'all',
-        nickname: '全体成员',
-        kindLabel: `群发 · 一次唤醒 ${members.filter((m) => m.kind === 'agent' && m.tag !== me?.tag).length} 个 AI`,
+        nickname: t('composer.everyone'),
+        kindLabel: t('composer.broadcast', {
+          n: members.filter((m) => m.kind === 'agent' && m.tag !== me?.tag).length,
+        }),
         member: null,
       });
     }
@@ -83,13 +87,13 @@ export function Composer({ roomId, members, replyTo, onClearReply }: ComposerPro
           key: m.tag,
           tag: m.tag,
           nickname: m.nickname,
-          kindLabel: m.kind === 'agent' ? `AI · ${m.adapterId ?? ''}` : '人类',
+          kindLabel: m.kind === 'agent' ? `AI · ${m.adapterId ?? ''}` : t('composer.human'),
           member: m,
         });
       }
     }
     return items;
-  }, [mentionQuery, members, me?.tag]);
+  }, [mentionQuery, members, me?.tag, t]);
 
   const commandQuery = text.startsWith('/') && !text.includes(' ') ? text : null;
   const commandMatches = useMemo(
@@ -172,7 +176,7 @@ export function Composer({ roomId, members, replyTo, onClearReply }: ComposerPro
     for (const file of Array.from(files).slice(0, 5)) {
       try {
         await upload(file);
-        pushToast(`已上传 ${file.name}`, 'success');
+      pushToast(t('composer.uploaded', { name: file.name }), 'success');
       } catch (err) {
         pushToast(err instanceof Error ? err.message : String(err), 'error');
       }
@@ -185,10 +189,10 @@ export function Composer({ roomId, members, replyTo, onClearReply }: ComposerPro
       <div className="mx-auto max-w-4xl">
         {replyTo && (
           <div className="mb-2 flex items-center gap-2 rounded-lg border bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground">
-            <span className="font-medium">引用 {replyTo.senderNickname}</span>
+            <span className="font-medium">{t('composer.replyTo', { nickname: replyTo.senderNickname })}</span>
             <span className="truncate">{replyTo.text.slice(0, 80)}</span>
             <button type="button" className="ml-auto hover:text-foreground" onClick={onClearReply}>
-              取消
+              {t('common.cancel')}
             </button>
           </div>
         )}
@@ -208,7 +212,7 @@ export function Composer({ roomId, members, replyTo, onClearReply }: ComposerPro
                       }}
                     >
                       <span className="font-mono text-xs">{item.cmd}</span>
-                      <span className="text-[11px] text-muted-foreground">{item.desc}</span>
+              <span className="text-[11px] text-muted-foreground">{t(item.descKey)}</span>
                     </button>
                   ))
                 : candidates.map((item, index) => (
@@ -225,9 +229,9 @@ export function Composer({ roomId, members, replyTo, onClearReply }: ComposerPro
                       {item.member ? (
                         <Avatar member={item.member} size="xs" />
                       ) : (
-                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-[10px] font-semibold text-primary">
-                          全
-                        </span>
+                            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-[10px] font-semibold text-primary">
+                              {t('composer.allChip')}
+                            </span>
                       )}
                       <span className="text-sm font-medium">{item.nickname}</span>
                       <span className="text-xs text-muted-foreground">@{item.tag}</span>
@@ -242,7 +246,7 @@ export function Composer({ roomId, members, replyTo, onClearReply }: ComposerPro
             <Button
               variant="ghost"
               size="icon"
-              title="上传文件到共享文件区"
+              title={t('composer.attach')}
               onClick={() => fileRef.current?.click()}
               disabled={sending}
             >
@@ -260,14 +264,14 @@ export function Composer({ roomId, members, replyTo, onClearReply }: ComposerPro
                   void onPickFiles(e.clipboardData.files);
                 }
               }}
-              placeholder="发消息…  用 @ 唤醒某个 AI，@all 唤醒全体 AI，Enter 发送 / Shift+Enter 换行"
+              placeholder={t('composer.placeholder')}
               className="min-h-[38px] resize-none border-0 bg-transparent py-2 shadow-none focus-visible:ring-0"
               rows={1}
             />
             <Button
               variant="ghost"
               size="icon"
-              title="发起多 AI 讨论"
+              title={t('composer.discuss')}
               onClick={() => setDiscussOpen(true)}
               disabled={!agents.length}
             >
@@ -276,7 +280,7 @@ export function Composer({ roomId, members, replyTo, onClearReply }: ComposerPro
             <Button
               variant="ghost"
               size="icon"
-              title="插入 @提及"
+              title={t('composer.mention')}
               onClick={() => {
                 setText((prev) => `${prev}@`);
                 textareaRef.current?.focus();
@@ -284,7 +288,7 @@ export function Composer({ roomId, members, replyTo, onClearReply }: ComposerPro
             >
               <AtSign className="h-4 w-4" />
             </Button>
-            <Button onClick={() => void submit()} disabled={sending || !text.trim()} size="icon" title="发送（Enter）">
+            <Button onClick={() => void submit()} disabled={sending || !text.trim()} size="icon" title={t('composer.send')}>
               {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             </Button>
           </div>
@@ -292,10 +296,13 @@ export function Composer({ roomId, members, replyTo, onClearReply }: ComposerPro
 
         <div className="mt-1.5 flex items-center gap-3 px-1 text-[11px] text-muted-foreground">
           <span>
-            已连接 {agents.length} 个 AI：{agents.map((a) => `@${a.tag}`).join(' ') || '（还没有 AI 成员）'}
+          {t('composer.helpHint', {
+            n: agents.length,
+            tags: agents.map((a) => `@${a.tag}`).join(' ') || t('composer.noAgents'),
+          })}
           </span>
           <span className="ml-auto hidden sm:inline">
-            /discuss 发起讨论 · /pause 暂停接力 · @all 群发全体 AI · 拖拽文件到窗口即可共享
+          {t('composer.footer')}
           </span>
         </div>
       </div>

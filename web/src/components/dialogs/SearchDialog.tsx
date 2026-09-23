@@ -8,6 +8,7 @@ import { Avatar } from '@/components/Avatar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { formatDateTime } from '@/lib/format';
+import { useI18n } from '@/lib/i18n';
 import { log } from '@/lib/logger';
 import type { ChatMessage } from '@/lib/types';
 
@@ -19,6 +20,7 @@ interface SearchDialogProps {
 
 /** 房间消息搜索 + 聊天记录导出 */
 export function SearchDialog({ open, onOpenChange, roomId }: SearchDialogProps) {
+  const { t } = useI18n();
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState<ChatMessage[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -79,12 +81,22 @@ export function SearchDialog({ open, onOpenChange, roomId }: SearchDialogProps) 
       search: query.trim() || undefined,
       limit: 5000,
     });
-    pushToast(query.trim() ? `已导出匹配「${query.trim()}」的记录` : '已开始导出聊天记录', 'success');
+    pushToast(
+      query.trim()
+        ? t('dialog.search.exported', { q: query.trim() })
+        : t('dialog.search.exportStarted'),
+      'success',
+    );
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 pt-[8vh]">
-      <button type="button" className="absolute inset-0" aria-label="关闭搜索" onClick={() => onOpenChange(false)} />
+      <button
+        type="button"
+        className="absolute inset-0"
+        aria-label={t('dialog.search.close')}
+        onClick={() => onOpenChange(false)}
+      />
       <div className="relative flex max-h-[76vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border bg-background shadow-xl">
         <div className="flex items-center gap-2 border-b px-3 py-2.5">
           <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -92,7 +104,7 @@ export function SearchDialog({ open, onOpenChange, roomId }: SearchDialogProps) 
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder={`在「${room?.name ?? '本群'}」里搜索消息内容…`}
+            placeholder={t('dialog.search.placeholder', { room: room?.name ?? t('dialog.search.thisRoom') })}
             className="border-0 px-0 shadow-none focus-visible:ring-0"
           />
           {busy && <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />}
@@ -104,12 +116,10 @@ export function SearchDialog({ open, onOpenChange, roomId }: SearchDialogProps) 
         <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto p-2">
           {error && <p className="p-4 text-sm text-destructive">{error}</p>}
           {!error && hits === null && (
-            <p className="p-4 text-sm text-muted-foreground">
-              输入关键词后回车即搜（服务端全文检索，能搜到本地没加载的更早记录）。
-            </p>
+            <p className="p-4 text-sm text-muted-foreground">{t('dialog.search.hint')}</p>
           )}
           {!error && hits?.length === 0 && !busy && (
-            <p className="p-4 text-sm text-muted-foreground">没有匹配「{query.trim()}」的消息。</p>
+            <p className="p-4 text-sm text-muted-foreground">{t('dialog.search.noMatch', { q: query.trim() })}</p>
           )}
           {hits?.map((message) => {
             const member = memberByTag.get(message.senderTag);
@@ -126,7 +136,7 @@ export function SearchDialog({ open, onOpenChange, roomId }: SearchDialogProps) 
                   <span className="ml-auto font-mono text-[10px] text-muted-foreground">#{message.id}</span>
                   <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px]" onClick={() => void onJump(message)}>
                     <CornerUpLeft className="mr-0.5 h-3 w-3" />
-                    定位
+                    {t('dialog.search.jump')}
                   </Button>
                 </div>
                 <p className="mt-1.5 line-clamp-4 whitespace-pre-wrap break-words text-sm">{message.text}</p>
@@ -136,7 +146,7 @@ export function SearchDialog({ open, onOpenChange, roomId }: SearchDialogProps) 
         </div>
 
         <div className="flex flex-wrap items-center gap-2 border-t px-3 py-2 text-xs text-muted-foreground">
-          <span>导出本群聊天记录：</span>
+          <span>{t('dialog.search.exportLabel')}</span>
           <Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => download('md')}>
             <Download className="mr-1 h-3 w-3" />
             Markdown
@@ -145,7 +155,9 @@ export function SearchDialog({ open, onOpenChange, roomId }: SearchDialogProps) 
             <Download className="mr-1 h-3 w-3" />
             JSON
           </Button>
-          <span className="ml-auto">{query.trim() ? '含搜索词时只导出匹配的消息' : '最多 5000 条'}</span>
+          <span className="ml-auto">
+            {query.trim() ? t('dialog.search.exportFiltered') : t('dialog.search.exportLimit')}
+          </span>
         </div>
       </div>
     </div>

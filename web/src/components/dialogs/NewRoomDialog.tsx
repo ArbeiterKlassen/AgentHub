@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 import { log } from '@/lib/logger';
+import { useI18n } from '@/lib/i18n';
 import type { Member } from '@/lib/types';
 
 interface Props {
@@ -25,6 +26,7 @@ interface Props {
 }
 
 export function NewRoomDialog({ open, onOpenChange }: Props) {
+  const { t } = useI18n();
   const [name, setName] = useState('');
   const [topic, setTopic] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
@@ -47,7 +49,7 @@ export function NewRoomDialog({ open, onOpenChange }: Props) {
     try {
       const room = await createRoom({ name: name.trim(), topic: topic.trim(), members: selected });
       log.action('创建房间', room.name);
-      pushToast(`房间「${room.name}」已创建`, 'success');
+      pushToast(t('dialog.newRoom.created', { name: room.name }), 'success');
       onOpenChange(false);
       setName('');
       setTopic('');
@@ -63,34 +65,36 @@ export function NewRoomDialog({ open, onOpenChange }: Props) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>新建群聊房间</DialogTitle>
-          <DialogDescription>创建后把 AI 成员拉进来，就可以 @ 它们干活了。</DialogDescription>
+          <DialogTitle>{t('dialog.newRoom.title')}</DialogTitle>
+          <DialogDescription>{t('dialog.newRoom.subtitle')}</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="room-name">房间名</Label>
+            <Label htmlFor="room-name">{t('dialog.newRoom.name')}</Label>
             <Input
               id="room-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="例如：产品设计评审"
+              placeholder={t('dialog.newRoom.namePlaceholder')}
               autoFocus
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="room-topic">主题（可选）</Label>
+            <Label htmlFor="room-topic">{t('dialog.newRoom.topic')}</Label>
             <Input
               id="room-topic"
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
-              placeholder="这个群聊要讨论什么"
+              placeholder={t('dialog.newRoom.topicPlaceholder')}
             />
           </div>
           <div className="space-y-1.5">
-            <Label>初始成员</Label>
+            <Label>{t('dialog.newRoom.initialMembers')}</Label>
             <div className="thin-scrollbar max-h-64 space-y-1 overflow-y-auto rounded-md border p-2">
-              {!allMembers.length && <p className="p-2 text-xs text-muted-foreground">还没有任何成员</p>}
+              {!allMembers.length && (
+                <p className="p-2 text-xs text-muted-foreground">{t('dialog.newRoom.noMembers')}</p>
+              )}
               {allMembers.map((member) => {
                 const checked = selected.includes(member.tag);
                 return (
@@ -119,7 +123,7 @@ export function NewRoomDialog({ open, onOpenChange }: Props) {
                     <span>{member.nickname}</span>
                     <span className="text-xs text-muted-foreground">@{member.tag}</span>
                     <span className="ml-auto text-[10px] text-muted-foreground">
-                      {member.kind === 'agent' ? `AI · ${member.adapterId ?? ''}` : '人类'}
+                      {member.kind === 'agent' ? `AI · ${member.adapterId ?? ''}` : t('common.human')}
                     </span>
                   </button>
                 );
@@ -130,11 +134,11 @@ export function NewRoomDialog({ open, onOpenChange }: Props) {
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            取消
+            {t('common.cancel')}
           </Button>
           <Button onClick={() => void submit()} disabled={busy || !name.trim()}>
             {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-            创建
+            {t('dialog.newRoom.create')}
           </Button>
         </DialogFooter>
       </DialogContent>

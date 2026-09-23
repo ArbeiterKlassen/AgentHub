@@ -1,8 +1,10 @@
 import { AlertTriangle, CheckCircle2, Info, X } from 'lucide-react';
 import { useUiStore } from '@/stores/ui';
+import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 
 export function Toasts() {
+  const { t } = useI18n();
   const { toasts, dismissToast } = useUiStore();
   if (!toasts.length) return null;
   return (
@@ -28,7 +30,7 @@ export function Toasts() {
             type="button"
             className="text-muted-foreground hover:text-foreground"
             onClick={() => dismissToast(toast.id)}
-            aria-label="关闭提示"
+            aria-label={t('common.closeToast')}
           >
             <X className="h-3.5 w-3.5" />
           </button>

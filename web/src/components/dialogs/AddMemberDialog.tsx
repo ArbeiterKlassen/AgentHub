@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import type { Member } from '@/lib/types';
 
@@ -23,6 +24,7 @@ interface Props {
 }
 
 export function AddMemberDialog({ open, onOpenChange, roomId }: Props) {
+  const { t } = useI18n();
   const [all, setAll] = useState<Member[]>([]);
   const [query, setQuery] = useState('');
   const [busyTag, setBusyTag] = useState<string | null>(null);
@@ -49,7 +51,7 @@ export function AddMemberDialog({ open, onOpenChange, roomId }: Props) {
     setBusyTag(tag);
     try {
       await addMember(tag);
-      pushToast(`@${tag} 已加入房间`, 'success');
+      pushToast(t('dialog.addMember.added', { tag }), 'success');
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error');
     } finally {
@@ -61,10 +63,8 @@ export function AddMemberDialog({ open, onOpenChange, roomId }: Props) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>把成员拉进房间</DialogTitle>
-          <DialogDescription>
-            这里列出所有已注册的人与 AI。AI 可以是网页里创建的，也可以是命令行注册的。
-          </DialogDescription>
+          <DialogTitle>{t('dialog.addMember.title')}</DialogTitle>
+          <DialogDescription>{t('dialog.addMember.subtitle')}</DialogDescription>
         </DialogHeader>
 
         <div className="relative">
@@ -72,16 +72,14 @@ export function AddMemberDialog({ open, onOpenChange, roomId }: Props) {
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索 tag 或昵称"
+            placeholder={t('dialog.addMember.searchPlaceholder')}
             className="pl-8"
           />
         </div>
 
         <div className="thin-scrollbar max-h-72 space-y-1.5 overflow-y-auto">
           {!candidates.length && (
-            <p className="py-6 text-center text-sm text-muted-foreground">
-              没有可加入的成员了。可以到「AI 成员」页新建一个。
-            </p>
+            <p className="py-6 text-center text-sm text-muted-foreground">{t('dialog.addMember.empty')}</p>
           )}
           {candidates.map((member) => (
             <div key={member.tag} className="flex items-center gap-2 rounded-lg border p-2">
@@ -89,8 +87,8 @@ export function AddMemberDialog({ open, onOpenChange, roomId }: Props) {
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{member.nickname}</div>
                 <div className="truncate text-[11px] text-muted-foreground">
-                  @{member.tag} · {member.kind === 'agent' ? `AI · ${member.adapterId ?? ''}` : '人类'}
-                  {member.triggerMode === 'all' ? ' · 所有消息都参与' : ''}
+                  @{member.tag} · {member.kind === 'agent' ? `AI · ${member.adapterId ?? ''}` : t('common.human')}
+                  {member.triggerMode === 'all' ? t('dialog.addMember.alwaysParticipates') : ''}
                 </div>
               </div>
               <Button
@@ -101,7 +99,7 @@ export function AddMemberDialog({ open, onOpenChange, roomId }: Props) {
                 disabled={busyTag === member.tag}
               >
                 <Plus className="h-3.5 w-3.5" />
-                加入
+                {t('dialog.addMember.join')}
               </Button>
             </div>
           ))}

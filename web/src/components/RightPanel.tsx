@@ -32,17 +32,19 @@ import { isImageFile } from '@/lib/fileKind';
 import { formatDateTime, formatRelative, formatSize } from '@/lib/format';
 import { cn, copyText } from '@/lib/utils';
 import { log } from '@/lib/logger';
+import { useI18n } from '@/lib/i18n';
 import { useState } from 'react';
 import type { Member } from '@/lib/types';
 
-const STATUS_LABEL: Record<string, string> = {
-  idle: '空闲',
-  thinking: '思考中',
-  error: '出错',
-  offline: '离线',
+const STATUS_KEY: Record<string, string> = {
+  idle: 'panel.status.idle',
+  thinking: 'panel.status.thinking',
+  error: 'panel.status.error',
+  offline: 'panel.status.offline',
 };
 
 export function RightPanel({ onClose, onAddMember }: { onClose?: () => void; onAddMember?: () => void } = {}) {
+  const { t } = useI18n();
 const { members, files, loadingRoom, typing } = useChatStore();
   const refreshRoom = useChatStore((s) => s.refreshRoom);
   const activeRoomId = useChatStore((s) => s.activeRoomId);
@@ -77,15 +79,15 @@ const { members, files, loadingRoom, typing } = useChatStore();
 
   const deleteSelectedFiles = async () => {
     if (!selectedFiles.length) return;
-    const ok = window.confirm(
-      `确定删除选中的 ${selectedFiles.length} 个文件？\n文件会从磁盘上删掉，聊天里对应的附件会标记为「已被删除」。`,
-    );
+    const ok = window.confirm(t('panel.files.confirmDelete', { n: selectedFiles.length }));
     if (!ok) return;
     try {
       const res = await removeFiles(selectedFiles);
       const failed = res.failed?.length ?? 0;
       pushToast(
-        `已删除 ${res.deleted.length} 个文件${failed ? `，${failed} 个没删掉（没权限或已不存在）` : ''}`,
+        failed
+          ? t('panel.files.deletedWithFailures', { ok: res.deleted.length, failed })
+          : t('panel.files.deleted', { n: res.deleted.length }),
         failed ? 'error' : 'success',
       );
       setSelectedFiles([]);
@@ -100,7 +102,7 @@ const { members, files, loadingRoom, typing } = useChatStore();
     for (const file of Array.from(fileList)) {
       try {
         await upload(file);
-        pushToast(`已上传 ${file.name}`, 'success');
+        pushToast(t('chat.uploaded', { name: file.name }), 'success');
       } catch (err) {
         pushToast(err instanceof Error ? err.message : String(err), 'error');
       }
@@ -112,17 +114,17 @@ const { members, files, loadingRoom, typing } = useChatStore();
     <aside className="flex h-full w-full shrink-0 flex-col border-l bg-muted/20 md:w-80">
       <div className="flex items-center gap-2 border-b px-3 py-2">
         {onClose && (
-          <Button variant="ghost" size="icon" className="h-8 w-8 md:hidden" onClick={onClose} title="关闭">
+          <Button variant="ghost" size="icon" className="h-8 w-8 md:hidden" onClick={onClose} title={t('common.close')}>
             <X className="h-4 w-4" />
           </Button>
         )}
         <Tabs value={rightTab} onValueChange={(v) => setRightTab(v as typeof rightTab)} className="flex-1">
           <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="members" className="text-xs">
-              成员 {list.length}
+              {t('panel.tab.members', { n: list.length })}
             </TabsTrigger>
             <TabsTrigger value="files" className="text-xs">
-              文件 {roomFiles.length}
+              {t('panel.tab.files', { n: roomFiles.length })}
             </TabsTrigger>
             <TabsTrigger value="agents" className="text-xs">
               AI {agents.length}
@@ -132,7 +134,7 @@ const { members, files, loadingRoom, typing } = useChatStore();
       </div>
 
       {!activeRoomId ? (
-        <p className="p-4 text-sm text-muted-foreground">先选择一个房间</p>
+          <p className="p-4 text-sm text-muted-foreground">{t('panel.pickRoom')}</p>
       ) : loadingRoom ? (
         <div className="flex flex-1 items-center justify-center">
           <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -144,23 +146,23 @@ const { members, files, loadingRoom, typing } = useChatStore();
               {room?.code && (
                 <div className="rounded-lg border bg-card p-2.5">
                   <div className="flex items-center justify-between">
-                    <span className="text-[11px] text-muted-foreground">群聊识别码（邀请码）</span>
+                    <span className="text-[11px] text-muted-foreground">{t('panel.invite.title')}</span>
                     {(me?.role === 'admin' || room.createdBy === me?.tag) && (
                       <button
                         type="button"
                         className="text-[11px] text-muted-foreground hover:text-destructive"
-                        title="重置邀请码（旧码立即失效）"
+                        title={t('panel.invite.rotateTitle')}
                         onClick={async () => {
                           try {
                             await apiClient.rotateRoomCode(room.id);
                             await refreshRoom(room.id);
-                            pushToast('邀请码已重置，旧码失效', 'success');
+                            pushToast(t('panel.invite.rotated'), 'success');
                           } catch (err) {
                             pushToast(err instanceof Error ? err.message : String(err), 'error');
                           }
                         }}
                       >
-                        重置
+                        {t('panel.invite.rotate')}
                       </button>
                     )}
                   </div>
@@ -170,47 +172,46 @@ const { members, files, loadingRoom, typing } = useChatStore();
                       variant="outline"
                       size="sm"
                       className="h-7 px-2 text-xs"
-                      title="复制邀请码"
+                      title={t('panel.invite.copyTitle')}
                       onClick={async () => {
                         await copyText(room.code);
-                        pushToast('邀请码已复制', 'success');
+                        pushToast(t('panel.invite.copied'), 'success');
                       }}
                     >
                       <Copy className="h-3 w-3" />
-                      复制
+                      {t('common.copy')}
                     </Button>
                   </div>
                   <button
                     type="button"
                     className="mt-1.5 w-full rounded border border-dashed px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-accent"
                     onClick={async () => {
-                      const text = [
-                        `【AgentHub 群聊邀请】${room.name}`,
-                        `邀请码：${room.code}`,
-                        `地址：${window.location.origin}`,
-                        '加入方式：打开地址 → 登录/注册 → 房间列表点钥匙图标 → 填邀请码',
-                      ].join('\n');
+                      const text = t('panel.invite.shareBody', {
+                        room: room.name,
+                        code: room.code,
+                        url: window.location.origin,
+                      });
                       await copyText(text);
-                      pushToast('邀请信息已复制，直接发给对方即可', 'success');
+                      pushToast(t('panel.invite.shareCopied'), 'success');
                     }}
                   >
-                    复制邀请信息（含码 + 地址 + 步骤）
+                    {t('panel.invite.copyShare')}
                   </button>
                 </div>
               )}
 
               {room && (
                 <div className="rounded-lg border bg-card p-2.5">
-                  <div className="text-[11px] text-muted-foreground">导出聊天记录</div>
+                  <div className="text-[11px] text-muted-foreground">{t('panel.export.title')}</div>
                   <div className="mt-1 flex gap-2">
                     <Button
                       variant="outline"
                       size="sm"
                       className="h-7 flex-1 px-2 text-xs"
-                      title="导出为 Markdown（最多 5000 条）"
+                      title={t('panel.export.mdTitle')}
                       onClick={() => {
                         downloadRoomExport(server, room.id, room.name, 'md', { limit: 5000 });
-                        pushToast('已开始导出 Markdown', 'success');
+                        pushToast(t('panel.export.mdStarted'), 'success');
                       }}
                     >
                       <Download className="mr-1 h-3 w-3" />
@@ -220,31 +221,31 @@ const { members, files, loadingRoom, typing } = useChatStore();
                       variant="outline"
                       size="sm"
                       className="h-7 flex-1 px-2 text-xs"
-                      title="导出为 JSON（含 meta，便于脚本处理）"
+                      title={t('panel.export.jsonTitle')}
                       onClick={() => {
                         downloadRoomExport(server, room.id, room.name, 'json', { limit: 5000 });
-                        pushToast('已开始导出 JSON', 'success');
+                        pushToast(t('panel.export.jsonStarted'), 'success');
                       }}
                     >
                       <Download className="mr-1 h-3 w-3" />
                       JSON
                     </Button>
                   </div>
-                  <p className="mt-1 text-[10px] text-muted-foreground">想按关键词搜/只导出一部分，用标题栏的搜索</p>
+                  <p className="mt-1 text-[10px] text-muted-foreground">{t('panel.export.hint')}</p>
                 </div>
               )}
 
               {room && (
                 <Button variant="outline" size="sm" className="w-full" onClick={() => setSettingsOpen(true)}>
                   <Settings className="h-3.5 w-3.5" />
-                  房间设置（上下文预算 / 接力上限 / 心跳）
+                  {t('panel.roomSettings')}
                 </Button>
               )}
 
               {onAddMember && (
                 <Button variant="outline" size="sm" className="w-full" onClick={onAddMember}>
                   <UserPlus className="h-3.5 w-3.5" />
-                  拉人 / 拉 AI 进房间
+                  {t('panel.addMember')}
                 </Button>
               )}
               {list.map((member) => (
@@ -255,7 +256,7 @@ const { members, files, loadingRoom, typing } = useChatStore();
                       <span className="truncate text-sm font-medium">{member.nickname}</span>
                       {member.role === 'admin' && (
                         <Badge variant="outline" className="h-4 px-1 text-[10px]">
-                          管理员
+                          {t('panel.admin')}
                         </Badge>
                       )}
                     </div>
@@ -265,7 +266,7 @@ const { members, files, loadingRoom, typing } = useChatStore();
                     variant="ghost"
                     size="icon"
                     className="h-7 w-7"
-                    title="在输入框里 @TA"
+                    title={t('panel.mention')}
                     onClick={() => insertToComposer(`@${member.tag} `)}
                   >
                     <MessageSquarePlus className="h-3.5 w-3.5" />
@@ -275,11 +276,11 @@ const { members, files, loadingRoom, typing } = useChatStore();
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                      title="移出房间"
+                      title={t('panel.removeFromRoom')}
                       onClick={async () => {
                         try {
                           await removeMember(member.tag);
-                          pushToast(`@${member.tag} 已移出房间`, 'success');
+                          pushToast(t('panel.removedFromRoom', { tag: member.tag }), 'success');
                         } catch (err) {
                           pushToast(err instanceof Error ? err.message : String(err), 'error');
                         }
@@ -296,13 +297,13 @@ const { members, files, loadingRoom, typing } = useChatStore();
               <input ref={fileInput} type="file" multiple hidden onChange={(e) => void onFiles(e.target.files)} />
               <Button variant="outline" size="sm" className="w-full" onClick={() => fileInput.current?.click()}>
                 <Upload className="h-3.5 w-3.5" />
-                上传文件到共享文件区
+                {t('panel.files.upload')}
               </Button>
 
               {/* 文件区概览 + 批量管理入口 */}
               <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
                 <span>
-                  {roomFiles.length} 个文件 · 共 {formatSize(filesTotalBytes)}
+                  {t('panel.files.summary', { n: roomFiles.length, size: formatSize(filesTotalBytes) })}
                 </span>
                 {deletableFiles.length > 0 && (
                   <button
@@ -313,7 +314,7 @@ const { members, files, loadingRoom, typing } = useChatStore();
                       setSelectedFiles([]);
                     }}
                   >
-                    {manageFiles ? '取消管理' : '管理／批量删除'}
+                    {manageFiles ? t('panel.files.manageOff') : t('panel.files.manage')}
                   </button>
                 )}
               </div>
@@ -330,10 +331,10 @@ const { members, files, loadingRoom, typing } = useChatStore();
                         )
                       }
                     >
-                      {selectedFiles.length === deletableFiles.length ? '全不选' : '全选可删的'}
+                      {selectedFiles.length === deletableFiles.length ? t('panel.files.deselectAll') : t('panel.files.selectAll')}
                     </button>
                     <span className="text-muted-foreground">
-                      已选 {selectedFiles.length}／可删 {deletableFiles.length}
+                      {t('panel.files.selected', { selected: selectedFiles.length, deletable: deletableFiles.length })}
                     </span>
                     <Button
                       variant="outline"
@@ -343,18 +344,18 @@ const { members, files, loadingRoom, typing } = useChatStore();
                       onClick={() => void deleteSelectedFiles()}
                     >
                       <Trash2 className="mr-1 h-3 w-3" />
-                      删除选中
+                      {t('panel.files.deleteSelected')}
                     </Button>
                   </div>
                   <p className="mt-1 text-[10px] text-muted-foreground">
-                    能删的是你自己上传的（管理员可以删全部）。删除后聊天里的附件会显示「已被删除」，记录本身保留。
+                    {t('panel.files.manageHint')}
                   </p>
                 </div>
               )}
 
               {!roomFiles.length && (
                 <p className="py-4 text-center text-xs text-muted-foreground">
-                  还没有共享文件。上传的文件会同时以消息形式出现在群里，AI 也能看到文件名。
+                  {t('panel.files.empty')}
                 </p>
               )}
               {roomFiles.map((file) => (
@@ -383,10 +384,10 @@ const { members, files, loadingRoom, typing } = useChatStore();
                           className="h-3.5 w-3.5 shrink-0 accent-primary"
                           checked={selectedFiles.includes(file.id)}
                           onChange={() => toggleFileSelected(file.id)}
-                          title="选中后可批量删除"
+                          title={t('panel.files.selectHint')}
                         />
                       ) : (
-                        <span className="h-3.5 w-3.5 shrink-0" title="这个文件不是你上传的，删不了" />
+                        <span className="h-3.5 w-3.5 shrink-0" title={t('panel.files.notYours')} />
                       ))}
                     {isImageFile(file) ? (
                       <span className="h-4 w-4 shrink-0 text-center text-[11px] leading-4">🖼</span>
@@ -397,7 +398,7 @@ const { members, files, loadingRoom, typing } = useChatStore();
                     {(file.version ?? 1) > 1 && (
                       <span
                         className="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground"
-                        title={file.previousId ? `上一版：${file.previousId}` : undefined}
+                        title={file.previousId ? t('panel.files.previousVersion', { id: file.previousId }) : undefined}
                       >
                         v{file.version}
                       </span>
@@ -406,7 +407,7 @@ const { members, files, loadingRoom, typing } = useChatStore();
                       href={downloadUrl(server, file.id, token)}
                       className="text-muted-foreground transition-colors hover:text-foreground"
                       download={file.name}
-                      title="下载"
+                      title={t('common.download')}
                     >
                       <Download className="h-3.5 w-3.5" />
                     </a>
@@ -414,11 +415,14 @@ const { members, files, loadingRoom, typing } = useChatStore();
                       <button
                         type="button"
                         className="text-muted-foreground transition-colors hover:text-destructive"
-                        title="删除"
+                        title={t('common.delete')}
                         onClick={async () => {
                           try {
                             const res = await removeFile(file.id);
-                            pushToast(res?.hint ? `文件已删除；${res.hint}` : '文件已删除', 'success');
+                            pushToast(
+                              res?.hint ? t('panel.files.deletedWithHint', { hint: res.hint }) : t('panel.files.deleted'),
+                              'success',
+                            );
                           } catch (err) {
                             pushToast(err instanceof Error ? err.message : String(err), 'error');
                           }
@@ -438,7 +442,7 @@ const { members, files, loadingRoom, typing } = useChatStore();
             <TabsContent value="agents" className="mt-0 space-y-2">
               {room?.paused && (
                 <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-400">
-                  本房间的 AI 自动接力已暂停
+                  {t('panel.agents.paused')}
                 </div>
               )}
               <div className="flex gap-2">
@@ -449,7 +453,7 @@ const { members, files, loadingRoom, typing } = useChatStore();
                   onClick={() => void control(room?.paused ? 'resume' : 'pause')}
                 >
                   {room?.paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
-                  {room?.paused ? '恢复接力' : '暂停接力'}
+                  {room?.paused ? t('panel.agents.resume') : t('panel.agents.pause')}
                 </Button>
                 <Button
                   variant="outline"
@@ -457,15 +461,17 @@ const { members, files, loadingRoom, typing } = useChatStore();
                   className="flex-1 text-destructive"
                   onClick={async () => {
                     const res = await control('stop').then(() => true).catch(() => false);
-                    if (res) pushToast('已清空排队任务并暂停', 'success');
+                    if (res) pushToast(t('panel.agents.stopped'), 'success');
                   }}
                 >
                   <StopCircle className="h-3.5 w-3.5" />
-                  全部停止
+                  {t('panel.agents.stopAll')}
                 </Button>
               </div>
 
-              {!agents.length && <p className="py-4 text-center text-xs text-muted-foreground">房间里还没有 AI 成员</p>}
+              {!agents.length && (
+                <p className="py-4 text-center text-xs text-muted-foreground">{t('panel.agents.empty')}</p>
+              )}
               {agents.map((agent) => (
                 <AgentCard
                   key={agent.tag}
@@ -475,7 +481,7 @@ const { members, files, loadingRoom, typing } = useChatStore();
                   onSpeak={async () => {
                     try {
                       await speak(agent.tag);
-                      pushToast(`已让 @${agent.tag} 发言`, 'success');
+                      pushToast(t('panel.agents.spoken', { tag: agent.tag }), 'success');
                       log.action('手动唤醒 AI', agent.tag);
                     } catch (err) {
                       pushToast(err instanceof Error ? err.message : String(err), 'error');
@@ -508,6 +514,7 @@ function AgentCard({
   onSpeak: () => void;
   onLogs: () => void;
 }) {
+  const { t } = useI18n();
   const status = thinking ? 'thinking' : (agent.status ?? 'offline');
   /**
    * 外部客户端（adapter=external）由它自己轮询取消息，服务端不代跑，所以既没有
@@ -516,10 +523,10 @@ function AgentCard({
   const externalLabel = !agent.external
     ? null
     : agent.online
-      ? '在线（外部）'
+      ? t('panel.external.online')
       : agent.lastSeenAt
-        ? `${formatRelative(agent.lastSeenAt)}活跃`
-        : '未连接';
+        ? t('panel.external.lastSeen', { time: formatRelative(agent.lastSeenAt) })
+        : t('panel.external.offline');
   const showExternal = Boolean(agent.external);
   return (
     <div className="rounded-lg border bg-card p-2.5">
@@ -528,7 +535,7 @@ function AgentCard({
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{agent.nickname}</div>
           <div className="truncate text-[11px] text-muted-foreground">
-            @{agent.tag} · {showExternal ? '外部客户端' : (agent.adapterId ?? 'AI')}
+            @{agent.tag} · {showExternal ? t('panel.external.label') : (agent.adapterId ?? 'AI')}
           </div>
         </div>
         {showExternal ? (
@@ -537,7 +544,11 @@ function AgentCard({
               'shrink-0 rounded-full px-2 py-0.5 text-[10px]',
               agent.online ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400' : 'bg-muted text-muted-foreground',
             )}
-            title={agent.lastSeenAt ? `最后活跃：${formatDateTime(agent.lastSeenAt)}` : '这个 AI 客户端还没用它的 token 连过服务端'}
+            title={
+              agent.lastSeenAt
+                ? t('panel.external.lastSeenTitle', { time: formatDateTime(agent.lastSeenAt) })
+                : t('panel.external.neverSeen')
+            }
           >
             {externalLabel}
           </span>
@@ -551,8 +562,8 @@ function AgentCard({
               status === 'offline' && 'bg-muted text-muted-foreground',
             )}
           >
-            {STATUS_LABEL[status] ?? status}
-            {agent.queue ? ` · 排队 ${agent.queue}` : ''}
+            {STATUS_KEY[status] ? t(STATUS_KEY[status]) : status}
+            {agent.queue ? t('panel.queue', { n: agent.queue }) : ''}
           </span>
         )}
       </div>
@@ -566,15 +577,20 @@ function AgentCard({
       )}
       <div className="mt-2 flex items-center gap-1">
         <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
-          触发：{agent.triggerMode === 'all' ? '所有消息' : agent.triggerMode === 'manual' ? '手动' : '被 @'}
+          {t('panel.trigger')}
+          {agent.triggerMode === 'all'
+            ? t('panel.trigger.all')
+            : agent.triggerMode === 'manual'
+              ? t('panel.trigger.manual')
+              : t('panel.trigger.mentions')}
         </Badge>
         <Button variant="ghost" size="sm" className="ml-auto h-6 px-1.5 text-[11px]" onClick={onMention}>
           @TA
         </Button>
-        <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px]" onClick={onSpeak} title="让 TA 主动说一句">
-          发言
+        <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px]" onClick={onSpeak} title={t('panel.agents.speakTitle')}>
+          {t('panel.agents.speak')}
         </Button>
-        <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px]" onClick={onLogs} title="运行记录">
+        <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px]" onClick={onLogs} title={t('panel.agents.logs')}>
           <ScrollText className="h-3 w-3" />
         </Button>
       </div>

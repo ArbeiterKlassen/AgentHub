@@ -3,6 +3,7 @@ import { Download, ExternalLink, ImageOff, Loader2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { downloadUrl } from '@/lib/api';
 import { formatSize } from '@/lib/format';
+import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import type { SharedFile } from '@/lib/types';
 
@@ -29,6 +30,7 @@ export function ImageAttachment({
   showLabel = true,
   className,
 }: ImageAttachmentProps) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const src = downloadUrl(server, file.id, token, false);
@@ -67,12 +69,12 @@ export function ImageAttachment({
         >
           <ImageOff className="h-3.5 w-3.5 text-muted-foreground" />
           <span className="max-w-[180px] truncate font-medium">{file.name}</span>
-          <span className="text-muted-foreground">预览失败，点击下载</span>
+          <span className="text-muted-foreground">{t('image.previewFailed')}</span>
         </a>
       ) : (
         <button
           type="button"
-          title="点击查看大图"
+          title={t('image.viewLarge')}
           onClick={() => setOpen(true)}
           className="block max-w-full cursor-zoom-in rounded-lg text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
@@ -84,7 +86,7 @@ export function ImageAttachment({
         <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
           <span className="max-w-[200px] truncate">{file.name}</span>
           <span>{formatSize(file.size)}</span>
-          <a href={saveUrl} download={file.name} className="hover:text-foreground" title="下载原图">
+          <a href={saveUrl} download={file.name} className="hover:text-foreground" title={t('image.downloadOriginal')}>
             <Download className="h-3 w-3" />
           </a>
         </div>
@@ -108,14 +110,19 @@ export function ImageAttachment({
                 target="_blank"
                 rel="noreferrer"
                 className="flex items-center gap-1 hover:text-foreground"
-                title="在新标签打开"
+                title={t('image.openInNewTab')}
               >
                 <ExternalLink className="h-3 w-3" />
-                打开
+                {t('image.open')}
               </a>
-              <a href={saveUrl} download={file.name} className="flex items-center gap-1 hover:text-foreground" title="下载">
+              <a
+                href={saveUrl}
+                download={file.name}
+                className="flex items-center gap-1 hover:text-foreground"
+                title={t('common.download')}
+              >
                 <Download className="h-3 w-3" />
-                下载
+                {t('common.download')}
               </a>
             </div>
           </div>

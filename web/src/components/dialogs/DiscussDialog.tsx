@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import type { Member } from '@/lib/types';
 
@@ -24,6 +25,7 @@ interface Props {
 }
 
 export function DiscussDialog({ open, onOpenChange, agents }: Props) {
+  const { t } = useI18n();
   const [topic, setTopic] = useState('');
   const [rounds, setRounds] = useState('2');
   const [selected, setSelected] = useState<string[]>([]);
@@ -37,7 +39,7 @@ export function DiscussDialog({ open, onOpenChange, agents }: Props) {
     setBusy(true);
     try {
       await discuss(topic.trim(), participants, Number(rounds));
-      pushToast('讨论已开始，可以在消息区实时观看', 'success');
+      pushToast(t('dialog.discuss.started'), 'success');
       onOpenChange(false);
       setTopic('');
       setSelected([]);
@@ -52,26 +54,24 @@ export function DiscussDialog({ open, onOpenChange, agents }: Props) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>发起多 AI 讨论</DialogTitle>
-          <DialogDescription>
-            系统会按顺序点名，让每个 AI 依次发言，后发言的 AI 能看到前面的观点。
-          </DialogDescription>
+          <DialogTitle>{t('dialog.discuss.title')}</DialogTitle>
+          <DialogDescription>{t('dialog.discuss.subtitle')}</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="topic">讨论主题</Label>
+            <Label htmlFor="topic">{t('dialog.discuss.topic')}</Label>
             <Input
               id="topic"
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
-              placeholder="例如：共享文件区应该怎么设计权限"
+              placeholder={t('dialog.discuss.topicPlaceholder')}
               autoFocus
             />
           </div>
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <Label>参与者（默认全部 AI）</Label>
+              <Label>{t('dialog.discuss.participants')}</Label>
               <button
                 type="button"
                 className="text-xs text-muted-foreground hover:text-foreground"
@@ -79,7 +79,9 @@ export function DiscussDialog({ open, onOpenChange, agents }: Props) {
                   setSelected(selected.length === agents.length ? [] : agents.map((a) => a.tag))
                 }
               >
-                {selected.length === agents.length && agents.length > 0 ? '清空' : '全选'}
+                {selected.length === agents.length && agents.length > 0
+                  ? t('dialog.discuss.clear')
+                  : t('dialog.discuss.selectAll')}
               </button>
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -104,11 +106,11 @@ export function DiscussDialog({ open, onOpenChange, agents }: Props) {
                   </button>
                 );
               })}
-              {!agents.length && <p className="text-xs text-muted-foreground">房间里还没有 AI 成员</p>}
+              {!agents.length && <p className="text-xs text-muted-foreground">{t('dialog.discuss.noAgents')}</p>}
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="rounds">轮数（1-6）</Label>
+            <Label htmlFor="rounds">{t('dialog.discuss.rounds')}</Label>
             <Input
               id="rounds"
               type="number"
@@ -123,11 +125,11 @@ export function DiscussDialog({ open, onOpenChange, agents }: Props) {
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            取消
+            {t('common.cancel')}
           </Button>
           <Button onClick={() => void submit()} disabled={busy || !topic.trim() || !agents.length}>
             {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-            开始讨论
+            {t('dialog.discuss.start')}
           </Button>
         </DialogFooter>
       </DialogContent>

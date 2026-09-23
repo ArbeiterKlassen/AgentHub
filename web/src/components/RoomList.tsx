@@ -15,6 +15,8 @@ import { NewRoomDialog } from '@/components/dialogs/NewRoomDialog';
 import { JoinRoomDialog } from '@/components/dialogs/JoinRoomDialog';
 import { GroupManagerDialog } from '@/components/dialogs/GroupManagerDialog';
 import { cn } from '@/lib/utils';
+import { useI18n } from '@/lib/i18n';
+import { localizedSystemText } from '@/lib/messageText';
 import { formatTime } from '@/lib/format';
 import { log } from '@/lib/logger';
 import type { RoomSummary } from '@/lib/types';
@@ -23,6 +25,7 @@ import type { RoomSummary } from '@/lib/types';
 const UNGROUPED = '__ungrouped__';
 
 export function RoomList({ onNavigate }: { onNavigate?: () => void } = {}) {
+  const { t } = useI18n();
   const { rooms, groups, activeRoomId, openRoom, moveRoomToGroup, createGroup, reorderGroups } = useChatStore();
   const pushToast = useUiStore((s) => s.pushToast);
   const collapsedGroups = useUiStore((s) => s.collapsedGroups);
@@ -63,7 +66,7 @@ export function RoomList({ onNavigate }: { onNavigate?: () => void } = {}) {
     .map((g) => ({ id: g.id, name: g.name, rooms: rooms.filter((r) => r.groupId === g.id) }))
     .filter((bucket) => bucket.rooms.length > 0);
   const ungrouped = rooms.filter((r) => !r.groupId || !knownGroupIds.has(r.groupId));
-  if (ungrouped.length) buckets.push({ id: UNGROUPED, name: '未分组', rooms: ungrouped });
+  if (ungrouped.length) buckets.push({ id: UNGROUPED, name: t('rooms.ungrouped'), rooms: ungrouped });
   // 一个分组都没有时，保持原来的平铺列表（不显示多余的「未分组」标题）
   const showHeaders = groups.length > 0;
   const flatRooms = !showHeaders ? rooms : [];
@@ -103,7 +106,7 @@ export function RoomList({ onNavigate }: { onNavigate?: () => void } = {}) {
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                title="移动到分组"
+                title={t('rooms.moveToGroup')}
                 onClick={(e) => e.stopPropagation()}
                 className="ml-auto shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus:opacity-100 group-hover/room:opacity-100"
               >
@@ -111,14 +114,14 @@ export function RoomList({ onNavigate }: { onNavigate?: () => void } = {}) {
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-              <DropdownMenuLabel>移动到分组</DropdownMenuLabel>
+              <DropdownMenuLabel>{t('rooms.moveToGroup')}</DropdownMenuLabel>
               {groups.map((g) => (
                 <DropdownMenuItem
                   key={g.id}
                   disabled={room.groupId === g.id}
                   onClick={() =>
                     void moveRoomToGroup(room.id, g.id)
-                      .then(() => pushToast(`「${room.name}」已移到「${g.name}」`, 'success'))
+                      .then(() => pushToast(t('rooms.movedToGroup', { room: room.name, group: g.name }), 'success'))
                       .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'))
                   }
                 >
@@ -132,27 +135,27 @@ export function RoomList({ onNavigate }: { onNavigate?: () => void } = {}) {
                   <DropdownMenuItem
                     onClick={() =>
                       void moveRoomToGroup(room.id, null)
-                        .then(() => pushToast(`「${room.name}」已移出分组`, 'success'))
+                        .then(() => pushToast(t('rooms.removedFromGroup', { room: room.name }), 'success'))
                         .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'))
                     }
                   >
-                    移出分组
+                    {t('rooms.removeFromGroup')}
                   </DropdownMenuItem>
                 </>
               )}
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={() => {
-                  const name = window.prompt('新分组名（会把这个群放进去）');
+                  const name = window.prompt(t('rooms.newGroupPrompt'));
                   if (!name?.trim()) return;
                   void createGroup(name.trim())
                     .then((g) => moveRoomToGroup(room.id, g.id))
-                    .then(() => pushToast(`已新建分组「${name.trim()}」并移入`, 'success'))
+                    .then(() => pushToast(t('rooms.groupCreated', { name: name.trim() }), 'success'))
                     .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
                 }}
               >
                 <Plus className="h-3 w-3" />
-                新建分组并移入…
+                {t('rooms.newGroupAndMove')}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -163,7 +166,9 @@ export function RoomList({ onNavigate }: { onNavigate?: () => void } = {}) {
             {room.memberCount}
           </span>
           <span className="truncate">
-            {last ? `${last.senderKind === 'agent' ? '🤖 ' : ''}${String(last.text).slice(0, 16)}` : '暂无消息'}
+            {last
+              ? `${last.senderKind === 'agent' ? '🤖 ' : ''}${String(localizedSystemText(last) ?? last.text).slice(0, 16)}`
+              : t('rooms.noMessages')}
           </span>
           {last && <span className="ml-auto shrink-0">{formatTime(last.createdAt)}</span>}
         </span>
@@ -174,15 +179,15 @@ export function RoomList({ onNavigate }: { onNavigate?: () => void } = {}) {
   return (
     <aside className="flex h-full w-full shrink-0 flex-col border-r bg-muted/30 md:w-64">
       <div className="flex items-center justify-between px-4 py-3">
-        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">群聊房间</span>
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('rooms.title')}</span>
         <div className="flex items-center gap-0.5">
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setGroupManagerOpen(true)} title="群聊分组">
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setGroupManagerOpen(true)} title={t('rooms.groups')}>
             <FolderCog className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setJoinOpen(true)} title="用邀请码加入群聊">
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setJoinOpen(true)} title={t('rooms.joinByCode')}>
             <KeyRound className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setDialogOpen(true)} title="新建群聊">
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setDialogOpen(true)} title={t('rooms.newRoom')}>
             <Plus className="h-4 w-4" />
           </Button>
         </div>
@@ -191,7 +196,7 @@ export function RoomList({ onNavigate }: { onNavigate?: () => void } = {}) {
       <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto px-2 pb-3">
         {!rooms.length && (
           <p className="px-2 py-3 text-xs text-muted-foreground">
-            还没有房间。点右上角「+」建一个群聊，或点钥匙图标用邀请码加入别人建的群。
+            {t('rooms.empty')}
           </p>
         )}
 
@@ -220,7 +225,12 @@ export function RoomList({ onNavigate }: { onNavigate?: () => void } = {}) {
                 if (dragPayload.kind === 'group' && isGroupBucket) dropGroupOn(dragPayload.id, bucket.id);
                 if (dragPayload.kind === 'room') {
                   void moveRoomToGroup(dragPayload.id, isGroupBucket ? bucket.id : null)
-                    .then(() => pushToast(isGroupBucket ? `已移入「${bucket.name}」` : '已移出分组', 'success'))
+                    .then(() =>
+                      pushToast(
+                        isGroupBucket ? t('rooms.movedInto', { name: bucket.name }) : t('rooms.movedOut'),
+                        'success',
+                      ),
+                    )
                     .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'));
                 }
                 setDragPayload(null);
@@ -244,8 +254,8 @@ export function RoomList({ onNavigate }: { onNavigate?: () => void } = {}) {
                 className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[11px] font-medium tracking-wide text-muted-foreground transition-colors hover:bg-accent/50"
                 title={
                   isGroupBucket
-                    ? `${collapsed ? '展开' : '折叠'}（拖动可换分组顺序；把房间拖到这里可移入本组）`
-                    : '把房间拖到这里可移出分组'
+                    ? t('rooms.dragGroupHint', { action: collapsed ? t('rooms.expand') : t('rooms.collapse') })
+                    : t('rooms.dragOutHint')
                 }
               >
                 {collapsed ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}

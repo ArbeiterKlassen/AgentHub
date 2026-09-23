@@ -6,6 +6,7 @@ import { useUiStore } from '@/stores/ui';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { useI18n } from '@/lib/i18n';
 
 /**
  * 分组管理：新建 / 改名 / 上移下移 / 删除。
@@ -13,6 +14,7 @@ import { Input } from '@/components/ui/input';
  * 删除分组不会删房间——里面的群会回到「未分组」。
  */
 export function GroupManagerDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const { t } = useI18n();
   const groups = useChatStore((s) => s.groups);
   const rooms = useChatStore((s) => s.rooms);
   const createGroup = useChatStore((s) => s.createGroup);
@@ -49,37 +51,39 @@ export function GroupManagerDialog({ open, onOpenChange }: { open: boolean; onOp
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>群聊分组</DialogTitle>
-          <DialogDescription>
-            把群聊分堆（像文件夹），侧栏会按分组折叠显示。分组是所有人共享的；删除分组不会删群，里面的群会回到「未分组」。
-          </DialogDescription>
+          <DialogTitle>{t('dialog.groups.title')}</DialogTitle>
+          <DialogDescription>{t('dialog.groups.subtitle')}</DialogDescription>
         </DialogHeader>
 
         <div className="flex items-center gap-2">
           <Input
             value={name}
-            placeholder="新分组名，例如「项目 A」"
+            placeholder={t('dialog.groups.placeholder')}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && name.trim()) {
-                void run('create', () => createGroup(name.trim()), `已创建分组「${name.trim()}」`).then(() => setName(''));
+                void run('create', () => createGroup(name.trim()), t('dialog.groups.created', { name: name.trim() })).then(
+                  () => setName(''),
+                );
               }
             }}
           />
           <Button
             disabled={!name.trim() || busy === 'create'}
             onClick={() =>
-              void run('create', () => createGroup(name.trim()), `已创建分组「${name.trim()}」`).then(() => setName(''))
+              void run('create', () => createGroup(name.trim()), t('dialog.groups.created', { name: name.trim() })).then(
+                () => setName(''),
+              )
             }
           >
             {busy === 'create' ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <FolderPlus className="mr-1 h-3.5 w-3.5" />}
-            新建
+            {t('common.create')}
           </Button>
         </div>
 
         <div className="thin-scrollbar max-h-[50vh] space-y-1.5 overflow-y-auto">
           {!groups.length && (
-            <p className="py-4 text-center text-sm text-muted-foreground">还没有分组。上面输入名字就能建一个。</p>
+            <p className="py-4 text-center text-sm text-muted-foreground">{t('dialog.groups.empty')}</p>
           )}
           {groups.map((group, index) => {
             const manage = canManage(group.createdBy);
@@ -93,18 +97,20 @@ export function GroupManagerDialog({ open, onOpenChange }: { open: boolean; onOp
                   onChange={(e) => setDraftNames((prev) => ({ ...prev, [group.id]: e.target.value }))}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && draft.trim() && draft.trim() !== group.name) {
-                      void run(`rename:${group.id}`, () => renameGroup(group.id, draft.trim()), '分组已改名');
+                      void run(`rename:${group.id}`, () => renameGroup(group.id, draft.trim()), t('dialog.groups.renamed'));
                     }
                   }}
                 />
-                <span className="shrink-0 text-[11px] text-muted-foreground">{roomCount(group.id)} 个群</span>
+                <span className="shrink-0 text-[11px] text-muted-foreground">
+                  {t('dialog.groups.roomCount', { n: roomCount(group.id) })}
+                </span>
                 {manage ? (
                   <>
                     <Button
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7"
-                      title="上移"
+                      title={t('dialog.groups.moveUp')}
                       disabled={index === 0 || busy === `sort:${group.id}`}
                       onClick={() => {
                         const prev = groups[index - 1];
@@ -120,7 +126,7 @@ export function GroupManagerDialog({ open, onOpenChange }: { open: boolean; onOp
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7"
-                      title="下移"
+                      title={t('dialog.groups.moveDown')}
                       disabled={index === groups.length - 1 || busy === `sort:${group.id}`}
                       onClick={() => {
                         const next = groups[index + 1];
@@ -136,19 +142,32 @@ export function GroupManagerDialog({ open, onOpenChange }: { open: boolean; onOp
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                      title="删除分组（群不会删，会回到未分组）"
+                      title={t('dialog.groups.deleteTitle')}
                       disabled={busy === `del:${group.id}`}
                       onClick={() => {
                         const count = roomCount(group.id);
-                        if (!window.confirm(`删除分组「${group.name}」？${count ? `里面的 ${count} 个群会回到「未分组」。` : ''}群本身不会被删。`)) return;
-                        void run(`del:${group.id}`, () => deleteGroup(group.id), `分组「${group.name}」已删除`);
+                        if (
+                          !window.confirm(
+                            count
+                              ? t('dialog.groups.confirmDeleteWithRooms', { name: group.name, n: count })
+                              : t('dialog.groups.confirmDelete', { name: group.name }),
+                          )
+                        )
+                          return;
+                        void run(
+                          `del:${group.id}`,
+                          () => deleteGroup(group.id),
+                          t('dialog.groups.deleted', { name: group.name }),
+                        );
                       }}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
                   </>
                 ) : (
-                  <span className="shrink-0 text-[11px] text-muted-foreground">@{(group.createdBy ?? '').slice(0, 12)} 建的</span>
+                  <span className="shrink-0 text-[11px] text-muted-foreground">
+                    {t('dialog.groups.createdBy', { tag: (group.createdBy ?? '').slice(0, 12) })}
+                  </span>
                 )}
               </div>
             );

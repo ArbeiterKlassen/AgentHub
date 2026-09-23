@@ -25,8 +25,8 @@ const flag = (name, fallback = null) => {
 const PORT = Number(flag('port', 9227));
 const APP = String(flag('app', 'http://localhost:5173'));
 const SERVER = String(flag('server', 'http://127.0.0.1:8787')).replace(/\/+$/, '');
-const PROFILE = String(flag('profile', 'default'));
-const ROOM_NAME = String(flag('room', process.env.AH_ROOM ?? 'general'));
+const PROFILE = String(flag('profile', 'codex-lead'));
+const ROOM_NAME = String(flag('room', 'CUMCM Team CHANNEL'));
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const IMAGE = path.resolve(REPO, String(flag('image', 'docs/image-preview-selftest.png')));
 const SHOT_DIR = path.join(REPO, 'docs', 'screenshots');

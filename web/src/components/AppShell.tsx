@@ -1,21 +1,28 @@
 import { useEffect } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { Bot, LogOut, MessagesSquare, Moon, PanelRight, Settings, Sun, Wifi, WifiOff } from 'lucide-react';
+import { Bot, Check, Languages, LogOut, MessagesSquare, Moon, PanelRight, Settings, Sun, Wifi, WifiOff } from 'lucide-react';
 import { useSessionStore } from '@/stores/session';
 import { useChatStore } from '@/stores/chat';
 import { useUiStore } from '@/stores/ui';
 import { Avatar } from '@/components/Avatar';
 import { Button } from '@/components/ui/button';
 import { Toasts } from '@/components/Toasts';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import { applyThemeClass } from '@/lib/theme';
+import { LOCALES, LOCALE_LABELS, useI18n } from '@/lib/i18n';
 import { log } from '@/lib/logger';
 
 const NAV = [
-  { to: '/', label: '群聊', icon: MessagesSquare, end: true },
-  { to: '/agents', label: 'AI 成员', icon: Bot, end: false },
-  { to: '/settings', label: '设置', icon: Settings, end: false },
-];
+  { to: '/', key: 'nav.chat', icon: MessagesSquare, end: true },
+  { to: '/agents', key: 'nav.agents', icon: Bot, end: false },
+  { to: '/settings', key: 'nav.settings', icon: Settings, end: false },
+] as const;
 
 export function AppShell() {
   const member = useSessionStore((s) => s.member);
@@ -23,6 +30,7 @@ export function AppShell() {
   const connected = useChatStore((s) => s.connected);
   const resetChat = useChatStore((s) => s.reset);
   const { theme, toggleTheme, rightPanelOpen, toggleRightPanel } = useUiStore();
+  const { t, locale, setLocale } = useI18n();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -49,7 +57,7 @@ export function AppShell() {
         </Link>
 
         <nav className="ml-1 flex min-w-0 items-center gap-0.5 sm:ml-2 sm:gap-1">
-          {NAV.map(({ to, label, icon: Icon, end }) => (
+          {NAV.map(({ to, key, icon: Icon, end }) => (
             <NavLink
               key={to}
               to={to}
@@ -64,7 +72,7 @@ export function AppShell() {
               }
             >
               <Icon className="h-4 w-4" />
-              <span className="hidden md:inline">{label}</span>
+              <span className="hidden md:inline">{t(key)}</span>
             </NavLink>
           ))}
         </nav>
@@ -75,21 +83,37 @@ export function AppShell() {
               'mr-1 hidden items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs sm:flex',
               connected ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground',
             )}
-            title={connected ? '实时连接正常' : '实时连接断开，正在重连（仍可手动刷新）'}
+            title={connected ? t('app.connectedTitle') : t('app.disconnectedTitle')}
           >
             {connected ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
-            {connected ? '实时在线' : '重连中'}
+            {connected ? t('app.connected') : t('app.reconnecting')}
           </span>
           <Button
             variant="ghost"
             size="icon"
             onClick={toggleRightPanel}
-            title={rightPanelOpen ? '收起侧栏' : '展开成员/文件侧栏'}
+            title={rightPanelOpen ? t('app.collapsePanel') : t('app.expandPanel')}
             className="hidden md:inline-flex"
           >
             <PanelRight className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon" onClick={toggleTheme} title="切换主题">
+          {/* 语言切换：只改浏览器本地渲染，不参与任何请求（见 lib/i18n.ts） */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" title={t('app.language')}>
+                <Languages className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {LOCALES.map((item) => (
+                <DropdownMenuItem key={item} onClick={() => setLocale(item)}>
+                  <Check className={cn('h-3 w-3', locale === item ? 'opacity-100' : 'opacity-0')} />
+                  {LOCALE_LABELS[item]}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button variant="ghost" size="icon" onClick={toggleTheme} title={t('app.toggleTheme')}>
             {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
           {member && (
@@ -106,7 +130,7 @@ export function AppShell() {
                 type="button"
                 onClick={logout}
                 className="text-muted-foreground transition-colors hover:text-destructive"
-                title="退出登录"
+                title={t('app.logout')}
               >
                 <LogOut className="h-3.5 w-3.5" />
               </button>

@@ -5,6 +5,7 @@ import { MessageItem } from '@/components/MessageItem';
 import { Button } from '@/components/ui/button';
 import { formatDay } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { useI18n } from '@/lib/i18n';
 import { apiClient } from '@/lib/api';
 import { log } from '@/lib/logger';
 
@@ -32,6 +33,7 @@ export function MessageList({
   onReply,
   onDelete,
 }: MessageListProps) {
+  const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
@@ -108,15 +110,13 @@ export function MessageList({
       <div className="flex flex-1 items-center justify-center p-8">
         <div className="max-w-md space-y-3 text-center">
           <MessagesSquare className="mx-auto h-10 w-10 text-muted-foreground/60" />
-          <h3 className="text-base font-semibold">房间还空着</h3>
-          <p className="text-sm text-muted-foreground">
-            在下面输入框里发送消息即可开始。用 <span className="mention-chip">@</span> 提到某个 AI 成员，它会被自动唤醒；
-            AI 之间也可以用 <span className="mention-chip">@</span> 互相接力讨论。
-          </p>
-          <p className="text-xs text-muted-foreground">
-            输入 <span className="rounded bg-muted px-1 font-mono">/help</span> 查看命令，
-            输入 <span className="rounded bg-muted px-1 font-mono">/discuss 主题 @a @b</span> 发起多 AI 讨论。
-          </p>
+        <h3 className="text-base font-semibold">{t('messages.emptyTitle')}</h3>
+        <p className="text-sm text-muted-foreground">
+          {t('messages.emptyHintBefore')} <span className="mention-chip">@</span> {t('messages.emptyHintAfter')}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {t('messages.emptyCommands')}
+        </p>
         </div>
       </div>
     );
@@ -129,7 +129,7 @@ export function MessageList({
         <div className="mb-2 flex justify-center">
           <Button variant="ghost" size="sm" className="text-xs" onClick={() => void loadEarlier()} disabled={loadingEarlier}>
             {loadingEarlier ? <Loader2 className="h-3 w-3 animate-spin" /> : <ArrowDown className="h-3 w-3 rotate-180" />}
-            加载更早的消息
+            {t('messages.loadEarlier')}
           </Button>
         </div>
 
@@ -167,7 +167,7 @@ export function MessageList({
           <div key={item.tag} className="flex items-center gap-2 px-4 py-2 text-xs text-muted-foreground">
             <Sparkles className="h-3.5 w-3.5 text-primary" />
             <span className="font-medium">{item.nickname}</span>
-            <span>正在思考</span>
+            <span>{t('messages.thinking')}</span>
             <span className="flex gap-0.5">
               <span className="typing-dot" />
               <span className="typing-dot" />
@@ -188,7 +188,7 @@ export function MessageList({
           'sticky bottom-2 left-full mr-4 flex h-8 w-8 items-center justify-center rounded-full border bg-background shadow transition-opacity',
           atBottom ? 'pointer-events-none opacity-0' : 'opacity-100',
         )}
-        title="回到最新"
+        title={t('messages.jumpToLatest')}
       >
         <ArrowDown className="h-4 w-4" />
       </button>

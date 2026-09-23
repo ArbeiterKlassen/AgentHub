@@ -1,21 +1,23 @@
+import { getLocale, t } from '@/lib/i18n';
+
 export function formatTime(ts: number): string {
   const d = new Date(ts);
-  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleTimeString(getLocale(), { hour: '2-digit', minute: '2-digit' });
 }
 
 export function formatDay(ts: number): string {
   const d = new Date(ts);
   const today = new Date();
   const sameDay = d.toDateString() === today.toDateString();
-  if (sameDay) return '今天';
+  if (sameDay) return t('time.today');
   const yesterday = new Date(today.getTime() - 86_400_000);
-  if (d.toDateString() === yesterday.toDateString()) return '昨天';
-  return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
+  if (d.toDateString() === yesterday.toDateString()) return t('time.yesterday');
+  return d.toLocaleDateString(getLocale(), { month: '2-digit', day: '2-digit' });
 }
 
 export function formatDateTime(ts: number): string {
   const d = new Date(ts);
-  return `${formatDay(ts)} ${d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
+  return `${formatDay(ts)} ${d.toLocaleTimeString(getLocale(), { hour: '2-digit', minute: '2-digit' })}`;
 }
 
 export function formatSize(bytes: number): string {
@@ -35,10 +37,10 @@ export function formatDuration(ms: number | null | undefined): string {
 /** 「3 分钟前」这种相对时间，用来显示外部客户端最后一次活跃 */
 export function formatRelative(ts: number, base = Date.now()): string {
   const diff = Math.max(base - ts, 0);
-  if (diff < 60_000) return '刚刚';
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
-  return `${Math.floor(diff / 86_400_000)} 天前`;
+  if (diff < 60_000) return t('time.justNow');
+  if (diff < 3_600_000) return t('time.minutesAgo', { n: Math.floor(diff / 60_000) });
+  if (diff < 86_400_000) return t('time.hoursAgo', { n: Math.floor(diff / 3_600_000) });
+  return t('time.daysAgo', { n: Math.floor(diff / 86_400_000) });
 }
 
 /** @全体 的几种写法（与后端 ALL_MENTION_RE 保持同一口径） */

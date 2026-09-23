@@ -11,10 +11,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AvatarPicker } from '@/components/AvatarPicker';
 import { cn } from '@/lib/utils';
+import { useI18n } from '@/lib/i18n';
 import { log } from '@/lib/logger';
 import type { AdapterInfo } from '@/lib/types';
 
 export function LoginPage() {
+  const { t } = useI18n();
   const navigate = useNavigate();
   const { server, setServer, setAuth } = useSessionStore();
   const loadRooms = useChatStore((s) => s.loadRooms);
@@ -96,29 +98,29 @@ export function LoginPage() {
             <h1 className="text-xl font-bold">
               Agent<span className="text-primary">Hub</span>
             </h1>
-            <p className="text-xs text-muted-foreground">人和 Codex / Claude Code / DeepSeek Harness / ZCode 等任意 AI CLI 在同一个群里协作</p>
+          <p className="text-xs text-muted-foreground">{t('login.tagline')}</p>
           </div>
         </div>
 
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base">进入群聊</CardTitle>
-            <CardDescription>
-              每个人、每个 AI 都有自己的登录 tag 与昵称。注册后会拿到一个 token，CLI 用它登录同一个身份。
-            </CardDescription>
+          <CardTitle className="text-base">{t('login.title')}</CardTitle>
+          <CardDescription>
+            {t('login.subtitle')}
+          </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className={cn('flex items-center gap-2 rounded-lg border px-3 py-2 text-xs', health?.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive')}>
               <span className={cn('h-2 w-2 rounded-full', health?.ok ? 'bg-emerald-500' : 'bg-destructive')} />
-              <span className="flex-1 truncate">{health ? health.detail : '正在连接后端…'}</span>
+            <span className="flex-1 truncate">{health ? health.detail : t('login.connecting')}</span>
               <button type="button" className="flex items-center gap-1 hover:underline" onClick={() => void probe()}>
                 <RefreshCw className="h-3 w-3" />
-                重试
+              {t('common.retry')}
               </button>
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="server">服务地址</Label>
+            <Label htmlFor="server">{t('login.serverLabel')}</Label>
               <div className="flex gap-2">
                 <Input
                   id="server"
@@ -128,28 +130,28 @@ export function LoginPage() {
                   className="flex-1"
                 />
                 <Button variant="outline" onClick={() => void probe(server)}>
-                  测试连接
+              {t('login.testConnection')}
                 </Button>
               </div>
-              <p className="text-[11px] text-muted-foreground">留空表示使用当前页面所在地址（前后端同端口部署时）。</p>
+          <p className="text-[11px] text-muted-foreground">{t('login.serverHint')}</p>
             </div>
 
             <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
               <TabsList className="grid w-full grid-cols-2">
                 <TabsTrigger value="register">
                   <UserPlus className="mr-1 h-3.5 w-3.5" />
-                  注册新身份
+              {t('login.tabRegister')}
                 </TabsTrigger>
                 <TabsTrigger value="login">
                   <LogIn className="mr-1 h-3.5 w-3.5" />
-                  用 token 登录
+              {t('login.tabLogin')}
                 </TabsTrigger>
               </TabsList>
 
               <TabsContent value="register" className="space-y-3 pt-2">
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
-                    <Label htmlFor="login-tag">登录 tag</Label>
+                    <Label htmlFor="login-tag">{t('login.tagLabel')}</Label>
                     <Input
                       id="login-tag"
                       value={tag}
@@ -158,22 +160,22 @@ export function LoginPage() {
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label htmlFor="login-nickname">昵称</Label>
+                    <Label htmlFor="login-nickname">{t('login.nicknameLabel')}</Label>
                     <Input
                       id="login-nickname"
                       value={nickname}
                       onChange={(e) => setNickname(e.target.value)}
-                      placeholder="阿丽"
+                      placeholder={t('login.nicknamePlaceholder')}
                     />
                   </div>
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label>身份类型</Label>
+                  <Label>{t('login.kindLabel')}</Label>
                   <div className="flex gap-2">
                     {[
-                      { value: 'human', label: '人类用户', icon: '🙂' },
-                      { value: 'agent', label: 'AI 成员', icon: '🤖' },
+                      { value: 'human', label: t('login.kindHuman'), icon: '🙂' },
+                      { value: 'agent', label: t('login.kindAgent'), icon: '🤖' },
                     ].map((item) => (
                       <button
                         key={item.value}
@@ -193,7 +195,7 @@ export function LoginPage() {
 
                 {kind === 'agent' && (
                   <div className="space-y-1.5">
-                    <Label>由哪个适配器驱动</Label>
+                    <Label>{t('login.adapterLabel')}</Label>
                     <div className="grid gap-1.5">
                       {orderedAdapters.map((adapter) => (
                         <button
@@ -208,7 +210,7 @@ export function LoginPage() {
                           <Bot className="h-3.5 w-3.5 text-muted-foreground" />
                           <span className="font-medium">{adapter.label}</span>
                           <span className="ml-auto text-[11px] text-muted-foreground">
-                            {adapter.available ? '可用' : adapter.probeDetail}
+                            {adapter.available ? t('common.available') : adapter.probeDetail}
                           </span>
                         </button>
                       ))}
@@ -217,23 +219,23 @@ export function LoginPage() {
                 )}
 
                 <div className="space-y-1.5">
-                  <Label>头像</Label>
+                  <Label>{t('login.avatarLabel')}</Label>
                   <AvatarPicker value={avatar} onChange={setAvatar} />
                 </div>
               </TabsContent>
 
               <TabsContent value="login" className="space-y-3 pt-2">
                 <div className="space-y-1.5">
-                  <Label htmlFor="login-tag-2">登录 tag</Label>
+                  <Label htmlFor="login-tag-2">{t('login.tagLabel')}</Label>
                   <Input id="login-tag-2" value={tag} onChange={(e) => setTag(e.target.value)} placeholder="alice" />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="login-token">登录 token</Label>
+                  <Label htmlFor="login-token">{t('login.tokenLabel')}</Label>
                   <Input
                     id="login-token"
                     value={token}
                     onChange={(e) => setToken(e.target.value)}
-                    placeholder="注册时拿到的 token"
+                    placeholder={t('login.tokenPlaceholder')}
                     type="password"
                   />
                 </div>
@@ -244,13 +246,13 @@ export function LoginPage() {
 
             <Button className="w-full" onClick={() => void submit()} disabled={busy || !tag.trim() || (tab === 'login' && !token.trim())}>
               {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-              {tab === 'register' ? '注册并进入' : '登录'}
+              {tab === 'register' ? t('login.submitRegister') : t('login.submitLogin')}
             </Button>
           </CardContent>
         </Card>
 
         <p className="text-center text-[11px] text-muted-foreground">
-          首次注册的账号会成为管理员。AI 成员也可以用命令行注册：
+            {t('login.adminHint')}
           <code className="ml-1 rounded bg-muted px-1">ah register --tag codex-1 --kind agent --adapter codex</code>
         </p>
       </div>

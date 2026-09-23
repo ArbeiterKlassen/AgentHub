@@ -27,9 +27,11 @@ import { NewAgentDialog } from '@/components/dialogs/NewAgentDialog';
 import { AgentLogsDialog } from '@/components/dialogs/AgentLogsDialog';
 import { copyText } from '@/lib/utils';
 import { log } from '@/lib/logger';
+import { useI18n } from '@/lib/i18n';
 import type { AdapterInfo, Member } from '@/lib/types';
 
 export function AgentsPage() {
+  const { t } = useI18n();
   const [members, setMembers] = useState<Member[]>([]);
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -64,14 +66,14 @@ export function AgentsPage() {
     try {
       const { token } = await apiClient.memberToken(member.tag);
       const lines = [
-        `cd <AgentHub 仓库目录>`,
+      t('agents.loginHint.cd'),
         `node server/bin/ah.mjs login --tag ${member.tag} --token ${token}${server ? ` --server ${server}` : ''}`,
         `node server/bin/ah.mjs agent run --tag ${member.tag} --adapter ${member.adapterId ?? 'mock'}`,
       ].join('\n');
       await copyText(lines);
       setCopiedTag(member.tag);
       window.setTimeout(() => setCopiedTag(null), 1500);
-      pushToast('CLI 登录/启动命令已复制', 'success');
+      pushToast(t('agents.cliCopied'), 'success');
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error');
     }
@@ -81,7 +83,7 @@ export function AgentsPage() {
     try {
       await apiClient.deleteMember(member.tag, true);
       setConfirmDeleteTag(null);
-      pushToast(`已删除成员 @${member.tag}（群里已有的发言记录会保留）`, 'success');
+      pushToast(t('agents.deleted', { tag: member.tag }), 'success');
       log.action('删除 AI 成员', member.tag);
       await load();
     } catch (err) {
@@ -97,30 +99,27 @@ export function AgentsPage() {
       <div className="mx-auto max-w-5xl space-y-6">
         <div className="flex items-center gap-3">
           <div>
-            <h1 className="text-lg font-semibold">AI 成员</h1>
-            <p className="text-sm text-muted-foreground">
-              每个 AI 成员 = 一个登录 tag + 一个适配器（本机的 Codex / Claude Code / DeepSeek Harness / ZCode / 本地模型…）。
+          <h1 className="text-lg font-semibold">{t('agents.title')}</h1>
+          <p className="text-sm text-muted-foreground">
+            {t('agents.subtitle')}
             </p>
           </div>
           <div className="ml-auto flex gap-2">
             <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
               {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-              刷新
+            {t('common.refresh')}
             </Button>
             <Button size="sm" onClick={() => setNewAgentOpen(true)}>
               <Bot className="mr-1 h-3.5 w-3.5" />
-              新增 AI 成员
+              {t('agents.add')}
             </Button>
           </div>
         </div>
 
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base">适配器可用性</CardTitle>
-            <CardDescription>
-              适配器定义在仓库根目录的 <code className="rounded bg-muted px-1">adapters.json</code>，数据目录下的同名文件可覆盖它。
-              加一种新 CLI 只需要在那里加一条。
-            </CardDescription>
+            <CardTitle className="text-base">{t('agents.adapters')}</CardTitle>
+            <CardDescription>{t('agents.adaptersDesc')}</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-2 md:grid-cols-2">
             {adapters.map((adapter) => (
@@ -136,7 +135,7 @@ export function AgentsPage() {
                 </div>
                 <p className="mt-1 text-[11px] text-muted-foreground">{adapter.description}</p>
                 <p className="mt-1 truncate text-[11px] text-muted-foreground/80" title={adapter.probeDetail}>
-                  {adapter.probeDetail || (adapter.disabled ? '模板未启用' : '')}
+                    {adapter.probeDetail || (adapter.disabled ? t('agents.templateDisabled') : '')}
                 </p>
               </div>
             ))}
@@ -144,10 +143,10 @@ export function AgentsPage() {
         </Card>
 
         <section className="space-y-2">
-          <h2 className="text-sm font-semibold text-muted-foreground">AI 成员（{agents.length}）</h2>
+          <h2 className="text-sm font-semibold text-muted-foreground">{t('agents.listTitle', { n: agents.length })}</h2>
           {!agents.length && (
             <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-              还没有 AI 成员。点右上角「新增 AI 成员」创建一个，再用「让 TA 发言」测试连通性。
+              {t('agents.empty')}
             </p>
           )}
           <div className="grid gap-3 md:grid-cols-2">
@@ -166,36 +165,43 @@ export function AgentsPage() {
                   </div>
                   <div className="flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
                     <Badge variant="outline" className="text-[10px]">
-                      触发：{agent.triggerMode === 'all' ? '所有消息' : agent.triggerMode === 'manual' ? '手动' : '被 @'}
+                      {t('panel.trigger')}
+                      {agent.triggerMode === 'all'
+                        ? t('panel.trigger.all')
+                        : agent.triggerMode === 'manual'
+                          ? t('panel.trigger.manual')
+                          : t('panel.trigger.mentions')}
                     </Badge>
                     {agent.workdir && (
                       <span className="max-w-full truncate" title={agent.workdir}>
                         cwd: {agent.workdir}
                       </span>
                     )}
-                    {agent.systemPrompt && <span className="truncate">设定：{agent.systemPrompt.slice(0, 40)}</span>}
+              {agent.systemPrompt && (
+                <span className="truncate">{t('agents.promptPreview', { text: agent.systemPrompt.slice(0, 40) })}</span>
+              )}
                   </div>
                   <div className="flex flex-wrap gap-1.5 pt-1">
                     <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setEditing(agent)}>
                       <Pencil className="h-3 w-3" />
-                      编辑
+                  {t('agents.edit')}
                     </Button>
                     <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setLogsFor(agent.tag)}>
                       <ScrollText className="h-3 w-3" />
-                      运行记录
+                  {t('panel.agents.logs')}
                     </Button>
                     <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => void copyLogin(agent)}>
                       {copiedTag === agent.tag ? <Check className="h-3 w-3" /> : <Terminal className="h-3 w-3" />}
-                      CLI 登录命令
+                  {t('agents.cliLogin')}
                     </Button>
                     {me?.role === 'admin' &&
                       (confirmDeleteTag === agent.tag ? (
                         <>
                           <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={() => void removeAgent(agent)}>
-                            确认删除
+                      {t('agents.confirmDelete')}
                           </Button>
                           <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setConfirmDeleteTag(null)}>
-                            取消
+                      {t('common.cancel')}
                           </Button>
                         </>
                       ) : (
@@ -204,9 +210,9 @@ export function AgentsPage() {
                           size="sm"
                           className="h-7 text-xs text-destructive"
                           onClick={() => setConfirmDeleteTag(agent.tag)}
-                          title="删除这个 AI 成员身份（消息记录保留）"
+                    title={t('agents.deleteTitle')}
                         >
-                          删除
+                    {t('common.delete')}
                         </Button>
                       ))}
                   </div>
@@ -217,7 +223,7 @@ export function AgentsPage() {
         </section>
 
         <section className="space-y-2">
-          <h2 className="text-sm font-semibold text-muted-foreground">人类成员（{humans.length}）</h2>
+          <h2 className="text-sm font-semibold text-muted-foreground">{t('agents.humansTitle', { n: humans.length })}</h2>
           <div className="grid gap-2 md:grid-cols-3">
             {humans.map((human) => (
               <div key={human.tag} className="flex items-center gap-2 rounded-lg border bg-card p-3">
@@ -225,7 +231,8 @@ export function AgentsPage() {
                 <div className="min-w-0">
                   <div className="truncate text-sm font-medium">{human.nickname}</div>
                   <div className="truncate text-[11px] text-muted-foreground">
-                    @{human.tag} {human.role === 'admin' ? '· 管理员' : ''} {human.tag === me?.tag ? '· 你' : ''}
+                @{human.tag} {human.role === 'admin' ? `· ${t('panel.admin')}` : ''}{' '}
+                {human.tag === me?.tag ? `· ${t('agents.you')}` : ''}
                   </div>
                 </div>
                 <UserRound className="ml-auto h-4 w-4 text-muted-foreground" />
@@ -261,6 +268,7 @@ function EditAgentDialog({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const { t } = useI18n();
   const [nickname, setNickname] = useState('');
   const [avatar, setAvatar] = useState('🤖');
   const [adapterId, setAdapterId] = useState('mock');
@@ -294,7 +302,7 @@ function EditAgentDialog({
         triggerMode,
       });
       log.action('更新 AI 成员', agent.tag);
-      pushToast(`@${agent.tag} 已更新`, 'success');
+      pushToast(t('agents.updated', { tag: agent.tag }), 'success');
       onSaved();
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error');
@@ -307,19 +315,19 @@ function EditAgentDialog({
     <Dialog open={Boolean(agent)} onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>编辑 @{agent?.tag}</DialogTitle>
+          <DialogTitle>{t('agents.editTitle', { tag: agent?.tag ?? '' })}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
           <div className="space-y-1.5">
-            <Label htmlFor="edit-nickname">昵称</Label>
+              <Label htmlFor="edit-nickname">{t('login.nicknameLabel')}</Label>
             <Input id="edit-nickname" value={nickname} onChange={(e) => setNickname(e.target.value)} />
           </div>
           <div className="space-y-1.5">
-            <Label>头像</Label>
+              <Label>{t('settings.avatar')}</Label>
             <AvatarPicker value={avatar} onChange={setAvatar} />
           </div>
           <div className="space-y-1.5">
-            <Label>适配器</Label>
+              <Label>{t('agents.edit.adapter')}</Label>
             <Select value={adapterId} onValueChange={setAdapterId}>
               <SelectTrigger>
                 <SelectValue />
@@ -336,39 +344,39 @@ function EditAgentDialog({
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="edit-workdir">工作目录</Label>
+              <Label htmlFor="edit-workdir">{t('agents.edit.workdir')}</Label>
             <Input
               id="edit-workdir"
               value={workdir}
               onChange={(e) => setWorkdir(e.target.value)}
-              placeholder="留空则用 data/workspaces/<tag>"
+                placeholder={t('agents.edit.workdirPlaceholder')}
             />
           </div>
           <div className="space-y-1.5">
-            <Label>触发方式</Label>
+              <Label>{t('agents.edit.trigger')}</Label>
             <Select value={triggerMode} onValueChange={(v) => setTriggerMode(v as typeof triggerMode)}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="mentions">被 @ 时参与</SelectItem>
-                <SelectItem value="all">所有人类消息都参与</SelectItem>
-                <SelectItem value="manual">只在手动点名时发言</SelectItem>
+                  <SelectItem value="mentions">{t('agents.edit.triggerMentions')}</SelectItem>
+                  <SelectItem value="all">{t('agents.edit.triggerAll')}</SelectItem>
+                  <SelectItem value="manual">{t('agents.edit.triggerManual')}</SelectItem>
               </SelectContent>
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="edit-prompt">专属设定</Label>
+              <Label htmlFor="edit-prompt">{t('agents.edit.prompt')}</Label>
             <Textarea id="edit-prompt" rows={3} value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} />
           </div>
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>
-            取消
+            {t('common.cancel')}
           </Button>
           <Button onClick={() => void save()} disabled={busy}>
             {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-            保存
+            {t('common.save')}
           </Button>
         </DialogFooter>
       </DialogContent>

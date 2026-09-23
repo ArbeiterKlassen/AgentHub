@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { useI18n } from '@/lib/i18n';
 import { AvatarPicker } from '@/components/AvatarPicker';
 import { cn, copyText } from '@/lib/utils';
 import { log } from '@/lib/logger';
@@ -29,6 +30,7 @@ interface Props {
 }
 
 export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
+  const { t } = useI18n();
   const [tag, setTag] = useState('');
   const [nickname, setNickname] = useState('');
   // 默认 external（服务端不代跑）；要服务端执行就选具体 CLI
@@ -73,9 +75,9 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
       setCreated({ tag: res.member.tag, token: res.token });
       if (activeRoomId) {
         await addMember(res.member.tag);
-        pushToast(`@${res.member.tag} 已加入当前房间`, 'success');
+      pushToast(t('dialog.newAgent.joined', { tag: res.member.tag }), 'success');
       } else {
-        pushToast(`AI 成员 @${res.member.tag} 已创建`, 'success');
+      pushToast(t('dialog.newAgent.created', { tag: res.member.tag }), 'success');
       }
       onCreated?.();
     } catch (err) {
@@ -115,18 +117,20 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>新增 AI 成员</DialogTitle>
+          <DialogTitle>{t('dialog.newAgent.title')}</DialogTitle>
           <DialogDescription>
-            每个 AI 成员都有自己的 tag 和登录 token，可被 @ 唤醒。创建后有两种运行方式：服务端直接跑，或在你本机用 CLI 边缘运行。
+            {t('dialog.newAgent.subtitle')}
           </DialogDescription>
         </DialogHeader>
 
         {created ? (
           <div className="space-y-3">
             <div className="rounded-lg border bg-muted/40 p-3 text-sm">
-              <p className="font-medium text-emerald-600 dark:text-emerald-400">✅ @{created.tag} 创建成功</p>
+            <p className="font-medium text-emerald-600 dark:text-emerald-400">
+              {t('dialog.newAgent.success', { tag: created.tag })}
+            </p>
               <p className="mt-1 text-xs text-muted-foreground">
-                把这个 token 记下来（也可以随时在设置页里查看/重置）。下面两行命令可以让你本机的 AI CLI 以这个身份进群：
+              {t('dialog.newAgent.tokenHint')}
               </p>
             </div>
             <pre className="thin-scrollbar overflow-x-auto rounded-lg border bg-muted/60 p-3 text-xs">{fullCommand}</pre>
@@ -140,17 +144,17 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
               }}
             >
               {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-              复制命令
+              {t('dialog.newAgent.copyCommands')}
             </Button>
             <p className="text-xs text-muted-foreground">
-              提示：也可以直接在网页里点「让 TA 发言」，由服务端调用这台机器上的 CLI（适配器：{adapterId}）。
+              {t('dialog.newAgent.runHint', { adapter: adapterId })}
             </p>
           </div>
         ) : (
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="agent-tag">登录 tag</Label>
+              <Label htmlFor="agent-tag">{t('login.tagLabel')}</Label>
                 <Input
                   id="agent-tag"
                   value={tag}
@@ -159,21 +163,21 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="agent-nickname">昵称</Label>
+              <Label htmlFor="agent-nickname">{t('login.nicknameLabel')}</Label>
                 <Input
                   id="agent-nickname"
                   value={nickname}
                   onChange={(e) => setNickname(e.target.value)}
-                  placeholder="Codex 一号"
+                placeholder={t('dialog.newAgent.nicknamePlaceholder')}
                 />
               </div>
             </div>
 
             <div className="space-y-1.5">
-              <Label>适配器（这个 AI 由谁驱动）</Label>
+              <Label>{t('agents.edit.adapter')}</Label>
               <Select value={adapterId} onValueChange={setAdapterId}>
                 <SelectTrigger>
-                  <SelectValue placeholder="选择适配器" />
+                  <SelectValue placeholder={t('dialog.newAgent.adapterPlaceholder')} />
                 </SelectTrigger>
                 <SelectContent>
                   {orderedAdapters.map((adapter) => (
@@ -187,49 +191,51 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                 <p className="text-xs text-muted-foreground">
                   {selectedAdapter.description}
                   {!selectedAdapter.available && (
-                    <span className="text-amber-600 dark:text-amber-400"> · 当前不可用：{selectedAdapter.probeDetail}</span>
+                    <span className="text-amber-600 dark:text-amber-400">
+                      {t('dialog.newAgent.adapterUnavailable', { detail: selectedAdapter.probeDetail })}
+                    </span>
                   )}
                 </p>
               )}
             </div>
 
             <div className="space-y-1.5">
-              <Label>头像</Label>
+              <Label>{t('settings.avatar')}</Label>
               <AvatarPicker value={avatar} onChange={setAvatar} />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="agent-cwd">工作目录（CLI 的 cwd）</Label>
+              <Label htmlFor="agent-cwd">{t('dialog.newAgent.workdir')}</Label>
                 <Input
                   id="agent-cwd"
                   value={workdir}
                   onChange={(e) => setWorkdir(e.target.value)}
-                  placeholder="留空则用 data/workspaces/<tag>"
+                placeholder={t('agents.edit.workdirPlaceholder')}
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>触发方式</Label>
+              <Label>{t('agents.edit.trigger')}</Label>
                 <Select value={triggerMode} onValueChange={(v) => setTriggerMode(v as typeof triggerMode)}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="mentions">被 @ 时参与</SelectItem>
-                    <SelectItem value="all">所有人类消息都参与</SelectItem>
-                    <SelectItem value="manual">只在手动点名时发言</SelectItem>
+                  <SelectItem value="mentions">{t('agents.edit.triggerMentions')}</SelectItem>
+                  <SelectItem value="all">{t('agents.edit.triggerAll')}</SelectItem>
+                  <SelectItem value="manual">{t('agents.edit.triggerManual')}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="agent-prompt">专属设定（可选）</Label>
+              <Label htmlFor="agent-prompt">{t('dialog.newAgent.prompt')}</Label>
               <Textarea
                 id="agent-prompt"
                 value={systemPrompt}
                 onChange={(e) => setSystemPrompt(e.target.value)}
-                placeholder="例如：你是一位严格的代码评审者，只关注可维护性与边界条件。"
+                placeholder={t('dialog.newAgent.promptPlaceholder')}
                 rows={3}
               />
             </div>
@@ -238,15 +244,15 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
 
         <DialogFooter>
           {created ? (
-            <Button onClick={() => onOpenChange(false)}>完成</Button>
+              <Button onClick={() => onOpenChange(false)}>{t('dialog.newAgent.done')}</Button>
           ) : (
             <>
               <Button variant="ghost" onClick={() => onOpenChange(false)}>
-                取消
+              {t('common.cancel')}
               </Button>
               <Button onClick={() => void submit()} disabled={busy || !tag.trim()}>
                 {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-                创建
+              {t('common.create')}
               </Button>
             </>
           )}

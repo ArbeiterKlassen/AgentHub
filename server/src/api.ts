@@ -578,7 +578,12 @@ export function buildApiRouter(): Router {
         const target = findMember(String(tag).toLowerCase());
         if (target) addRoomMember(room.id, target.tag, 'member');
       }
-      systemMessage(room.id, `房间「${room.name}」已创建，创建者 @${me.tag}`);
+      systemMessage(room.id, `房间「${room.name}」已创建，创建者 @${me.tag}`, {
+        kind: 'room.created',
+        // 系统消息的文本由服务端生成；这里附上模板 key 与参数，前端按当前语言渲染，认不出就显示原文
+        i18nKind: 'room.created',
+        i18nParams: { room: room.name, tag: me.tag },
+      });
       // 让被拉进新房间的成员客户端立刻看到它（否则要刷新页面才出现）
       broadcast({ type: 'room.created', roomId: room.id, data: roomSummary(room, me.tag, req), ts: Date.now() });
       return { room: roomSummary(room, me.tag, req) };
@@ -765,6 +770,8 @@ export function buildApiRouter(): Router {
           kind: 'member.join',
           tag: me.tag,
           via: 'invite-code',
+          i18nKind: 'member.join.invite',
+          i18nParams: { tag: me.tag, nickname: me.nickname },
         });
       }
       return { ok: true, alreadyMember: already, room: roomSummary(room, me.tag, req) };
@@ -783,6 +790,8 @@ export function buildApiRouter(): Router {
       systemMessage(room.id, `@${me.tag} 重置了本群邀请码，旧邀请码已失效`, {
         kind: 'room.code.rotate',
         level: 'info',
+        i18nKind: 'room.code.rotate',
+        i18nParams: { tag: me.tag },
       });
       return { ok: true, roomId: room.id, code };
     }),
@@ -810,7 +819,11 @@ export function buildApiRouter(): Router {
         patch.group_id = target;
       }
       updateRoom(room.id, patch);
-      systemMessage(room.id, `@${me.tag} 更新了房间信息`);
+      systemMessage(room.id, `@${me.tag} 更新了房间信息`, {
+        kind: 'room.updated',
+        i18nKind: 'room.updated',
+        i18nParams: { tag: me.tag },
+      });
       return { room: roomSummary(findRoom(room.id)!, me.tag, req) };
     }),
   );
@@ -883,7 +896,12 @@ export function buildApiRouter(): Router {
         data: { member: publicMember(target), via: 'manual' },
         ts: Date.now(),
       });
-      systemMessage(room.id, `@${tag}（${target.nickname}）加入了房间`, { kind: 'member.join', tag });
+      systemMessage(room.id, `@${tag}（${target.nickname}）加入了房间`, {
+        kind: 'member.join',
+        tag,
+        i18nKind: 'member.join',
+        i18nParams: { tag, nickname: target.nickname },
+      });
       return { ok: true, members: listRoomMemberTags(room.id) };
     }),
   );
@@ -897,7 +915,12 @@ export function buildApiRouter(): Router {
       if (tag !== me.tag && me.role !== 'admin') throw new HttpError(403, '只能移除自己或由管理员执行');
       removeRoomMember(room.id, tag);
       broadcast({ type: 'member.leave', roomId: room.id, data: { tag }, ts: Date.now() });
-      systemMessage(room.id, `@${tag} 离开了房间`, { kind: 'member.leave', tag });
+      systemMessage(room.id, `@${tag} 离开了房间`, {
+        kind: 'member.leave',
+        tag,
+        i18nKind: 'member.leave',
+        i18nParams: { tag },
+      });
       return { ok: true, members: listRoomMemberTags(room.id) };
     }),
   );
@@ -1410,7 +1433,11 @@ export function buildApiRouter(): Router {
         text: `📎 上传了文件 ${row.name}（${formatSize(row.size)}）`,
         type: 'file',
         files: [row.id],
-        meta: { noRoute: false },
+        meta: {
+          noRoute: false,
+          i18nKind: 'file.uploaded',
+          i18nParams: { name: row.name, size: formatSize(row.size) },
+        },
       });
       const queued = routeMessage(posted);
       return { file, message: publicMessage(posted), queued };

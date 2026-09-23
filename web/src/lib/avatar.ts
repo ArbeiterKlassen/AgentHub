@@ -1,4 +1,5 @@
 /** 头像工具：预设 emoji + 本地图片居中裁剪压缩为 100×100 的 data URL。 */
+import { t } from '@/lib/i18n';
 
 export const AVATAR_SIZE = 100;
 
@@ -33,7 +34,7 @@ function loadImage(file: File): Promise<HTMLImageElement> {
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
-      reject(new Error('图片解码失败，请换一张 png / jpg / webp 图片'));
+      reject(new Error(t('avatar.err.decodeFailed')));
     };
     img.src = url;
   });
@@ -41,19 +42,19 @@ function loadImage(file: File): Promise<HTMLImageElement> {
 
 /** 居中裁剪为正方形并缩放压缩，优先 WebP，退化时用 PNG。 */
 export async function compressAvatarToDataUrl(file: File, size = AVATAR_SIZE): Promise<string> {
-  if (!file.type.startsWith('image/')) throw new Error('请选择图片文件');
-  if (file.size > 10 * 1024 * 1024) throw new Error('图片不能超过 10 MB');
+  if (!file.type.startsWith('image/')) throw new Error(t('avatar.err.notImage'));
+  if (file.size > 10 * 1024 * 1024) throw new Error(t('avatar.err.tooLarge'));
 
   const img = await loadImage(file);
   const width = img.naturalWidth || img.width;
   const height = img.naturalHeight || img.height;
-  if (!width || !height) throw new Error('图片尺寸无效');
+  if (!width || !height) throw new Error(t('avatar.err.badSize'));
 
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('当前浏览器不支持图片压缩');
+  if (!ctx) throw new Error(t('avatar.err.noCanvas'));
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
 

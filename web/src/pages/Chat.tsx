@@ -16,11 +16,13 @@ import { AddMemberDialog } from '@/components/dialogs/AddMemberDialog';
 import { JoinRoomDialog } from '@/components/dialogs/JoinRoomDialog';
 import { SearchDialog } from '@/components/dialogs/SearchDialog';
 import { cn } from '@/lib/utils';
+import { useI18n } from '@/lib/i18n';
 import { log } from '@/lib/logger';
 import type { ChatMessage } from '@/lib/types';
 
 export function ChatPage() {
   useRealtime();
+  const { t } = useI18n();
   const {
     rooms,
     activeRoomId,
@@ -74,7 +76,7 @@ export function ChatPage() {
     for (const file of dropped) {
       try {
         await upload(file);
-        pushToast(`已上传 ${file.name}`, 'success');
+        pushToast(t('chat.uploaded', { name: file.name }), 'success');
       } catch (err) {
         pushToast(err instanceof Error ? err.message : String(err), 'error');
       }
@@ -107,17 +109,17 @@ export function ChatPage() {
         {!activeRoomId ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
             <Hash className="h-10 w-10 text-muted-foreground/50" />
-            <h2 className="text-lg font-semibold">还没有加入任何房间</h2>
+            <h2 className="text-lg font-semibold">{t('chat.noRoomsTitle')}</h2>
             <p className="max-w-md text-sm text-muted-foreground">
-              创建一个群聊房间，把 AI 成员拉进来，然后直接 @ 它们提问。AI 之间也可以互相 @ 接力讨论。
+              {t('chat.noRoomsHint')}
             </p>
             <Button onClick={() => setNewRoomOpen(true)}>
               <Plus className="mr-1 h-4 w-4" />
-              新建群聊房间
+              {t('chat.newRoom')}
             </Button>
             <Button variant="outline" onClick={() => setJoinRoomOpen(true)}>
               <KeyRound className="mr-1 h-4 w-4" />
-              用邀请码加入群聊
+              {t('chat.joinByCode')}
             </Button>
             <NewRoomDialog open={newRoomOpen} onOpenChange={setNewRoomOpen} />
             <JoinRoomDialog open={joinRoomOpen} onOpenChange={setJoinRoomOpen} />
@@ -126,23 +128,23 @@ export function ChatPage() {
           <>
             {/* 手机端顶栏：房间抽屉 + 标题 + 成员面板 */}
             <div className="flex shrink-0 items-center gap-1 border-b px-1.5 py-1.5 md:hidden">
-              <Button variant="ghost" size="icon" onClick={() => setRoomDrawerOpen(true)} title="房间列表">
+              <Button variant="ghost" size="icon" onClick={() => setRoomDrawerOpen(true)} title={t('chat.roomList')}>
                 <Menu className="h-5 w-5" />
               </Button>
               <div className="min-w-0 flex-1 px-1">
                 <div className="flex items-center gap-1.5">
-                  <span className="truncate text-sm font-semibold">{room?.name ?? '房间'}</span>
+                  <span className="truncate text-sm font-semibold">{room?.name ?? t('common.room')}</span>
                   {room?.paused && <Pause className="h-3 w-3 shrink-0 text-amber-500" />}
                   {roomTyping.length > 0 && <Loader2 className="h-3 w-3 shrink-0 animate-spin text-primary" />}
                 </div>
                 <p className="truncate text-[11px] text-muted-foreground">
-                  {room?.memberCount ?? 0} 人 · {room?.messageCount ?? 0} 条消息
+                  {t('chat.membersAndMessages', { members: room?.memberCount ?? 0, messages: room?.messageCount ?? 0 })}
                 </p>
               </div>
-              <Button variant="ghost" size="icon" onClick={() => setPanelDrawerOpen(true)} title="成员 / 文件 / AI">
+              <Button variant="ghost" size="icon" onClick={() => setPanelDrawerOpen(true)} title={t('chat.panelTitle')}>
                 <Users className="h-5 w-5" />
               </Button>
-              <Button variant="ghost" size="icon" onClick={() => setSearchOpen(true)} title="搜索消息 / 导出记录">
+              <Button variant="ghost" size="icon" onClick={() => setSearchOpen(true)} title={t('chat.searchTitle')}>
                 <Search className="h-5 w-5" />
               </Button>
             </div>
@@ -150,22 +152,23 @@ export function ChatPage() {
             <div className="hidden h-14 shrink-0 items-center gap-3 border-b px-4 md:flex">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <h2 className="truncate font-semibold">{room?.name ?? '房间'}</h2>
+                  <h2 className="truncate font-semibold">{room?.name ?? t('common.room')}</h2>
                   {room?.paused && (
                     <span className="flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-700 dark:text-amber-400">
                       <Pause className="h-2.5 w-2.5" />
-                      已暂停接力
+                      {t('chat.paused')}
                     </span>
                   )}
                   {roomTyping.length > 0 && (
                     <span className="flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] text-primary">
                       <Loader2 className="h-2.5 w-2.5 animate-spin" />
-                      {roomTyping.length} 个 AI 正在思考
+                      {t('chat.thinking', { n: roomTyping.length })}
                     </span>
                   )}
                 </div>
                 <p className="truncate text-[11px] text-muted-foreground">
-                  {room?.topic || `创建者 @${room?.createdBy ?? '-'}`} · {room?.messageCount ?? 0} 条消息
+                  {room?.topic || t('chat.createdBy', { tag: room?.createdBy ?? '-' })} ·{' '}
+                  {t('chat.messageCount', { n: room?.messageCount ?? 0 })}
                 </p>
               </div>
 
@@ -181,14 +184,14 @@ export function ChatPage() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  title="搜索消息 / 导出聊天记录"
+                  title={t('chat.searchTitle')}
                   onClick={() => setSearchOpen(true)}
                 >
                   <Search className="h-3.5 w-3.5" />
                 </Button>
                 <Button variant="outline" size="sm" onClick={() => setAddMemberOpen(true)}>
                   <Users className="mr-1 h-3.5 w-3.5" />
-                  拉人/拉 AI
+                  {t('chat.addMember')}
                 </Button>
                 <Button
                   variant="outline"
@@ -203,17 +206,17 @@ export function ChatPage() {
                   }}
                 >
                   {room?.paused ? <Play className="mr-1 h-3.5 w-3.5" /> : <Pause className="mr-1 h-3.5 w-3.5" />}
-                  {room?.paused ? '恢复' : '暂停'}
+                  {room?.paused ? t('chat.resume') : t('chat.pause')}
                 </Button>
                 <Button
                   variant="ghost"
                   size="sm"
                   className="text-destructive"
-                  title="清空排队任务并暂停接力"
+                  title={t('chat.stopTitle')}
                   onClick={async () => {
                     try {
                       await control('stop');
-                      pushToast('已停止排队中的 AI 任务', 'success');
+                      pushToast(t('chat.stopped'), 'success');
                     } catch (err) {
                       pushToast(err instanceof Error ? err.message : String(err), 'error');
                     }
@@ -252,7 +255,7 @@ export function ChatPage() {
           <div className="pointer-events-none absolute inset-3 z-20 flex items-center justify-center rounded-xl border-2 border-dashed border-primary bg-background/85">
             <div className="flex items-center gap-2 text-sm font-medium text-primary">
               <Upload className="h-4 w-4" />
-              松手即可上传到共享文件区
+              {t('chat.dropHint')}
             </div>
           </div>
         )}
@@ -269,7 +272,7 @@ export function ChatPage() {
             type="button"
             className="absolute inset-0 bg-black/50"
             onClick={() => setRoomDrawerOpen(false)}
-            aria-label="关闭房间列表"
+            aria-label={t('chat.closeRoomList')}
           />
           <div className="absolute inset-y-0 left-0 w-[82%] max-w-xs bg-background shadow-xl">
             <RoomList onNavigate={() => setRoomDrawerOpen(false)} />
@@ -284,7 +287,7 @@ export function ChatPage() {
             type="button"
             className="absolute inset-0 bg-black/50"
             onClick={() => setPanelDrawerOpen(false)}
-            aria-label="关闭成员面板"
+            aria-label={t('chat.closePanel')}
           />
           <div className="absolute inset-y-0 right-0 w-[90%] max-w-sm bg-background shadow-xl">
             <RightPanel
