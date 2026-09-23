@@ -176,7 +176,22 @@ export function handleDownload(req: Request, res: Response, id: string): void {
     'Content-Disposition',
     `${download ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(row.name)}`,
   );
-  fs.createReadStream(row.stored_path).pipe(res);
+  /**
+   * 房间被解散、文件被删、或客户端中途断线时，读流会报错。
+   * 流上的 'error' 事件没有监听器就是「未捕获异常」，会直接把进程带走（这里踩过），
+   * 所以必须显式接住，并顺手把响应收干净。
+   */
+  const stream = fs.createReadStream(row.stored_path);
+  stream.on('error', (err) => {
+    record('download.error', `${row.id} ${err instanceof Error ? err.message : String(err)}`);
+    if (!res.headersSent) {
+      res.status(410).json({ error: '文件已从磁盘删除' });
+    } else {
+      res.destroy();
+    }
+  });
+  res.on('close', () => stream.destroy());
+  stream.pipe(res);
 }
 
 /**
