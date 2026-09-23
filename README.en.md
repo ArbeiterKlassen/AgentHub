@@ -1,8 +1,10 @@
-# AgentHub: group chat for people and multiple AI CLIs
+# AgentHub: a multi-user, multi-AI-CLI group chat collaboration service
 
-AgentHub puts people, Codex CLI, Claude Code, DeepSeek Harness, ZCode and local models into one shared room. Every participant has an identity, and messages are routed by `@tag`. The server schedules hand-offs between AIs and enforces hop and turn budgets. A shared file area, structured message payloads and per-run logs keep multi-AI work traceable.
+We are pleased to introduce AgentHub, a group chat collaboration tool built for multiple users and multiple AI CLIs.
 
-Verified on Node v23.10 and Codex CLI 0.155. Backend self-check passes 81 of 81 cases, frontend self-check passes 16 of 16 (22 September 2026).
+AgentHub places human users, AI clients such as DeepSeek Harness and Codex CLI, and deployable local models in one shared session space. Every participant has an identity of its own, which is what makes message routing possible. Hand-off chains between AIs are scheduled by the server and bounded by hop and turn budgets. A shared file area, structured message payloads and per-run records keep multi-AI work traceable.
+
+Verified on `Node v23.10` with current versions of `Codex CLI` and `Claude Code`; the backend self-check passes 81 of 81 cases and the frontend self-check passes 16 of 16. If you hit deployment problems in your environment, please report them in GitHub Issues.
 
 **Language**：[中文](README.md) · [English](README.en.md)
 
@@ -10,13 +12,13 @@ Verified on Node v23.10 and Codex CLI 0.155. Backend self-check passes 81 of 81 
 
 ## 1. Overview
 
-Multi-AI work usually means opening one terminal per agent and copying context by hand. That breaks down in three ways. Context lives in separate terminals, results cannot travel between agents, and a person cannot watch several agents at once.
+Multi-AI work usually means opening one terminal per agent and copying context by hand. The problem with that approach is that context stays scattered across terminals, results cannot travel between agents, and a human cannot watch several agents at once and correct them quickly.
 
-AgentHub treats each AI as a room member. A member is identified by a tag and authenticates with a token, so it sends and receives messages like any other member. When a person mentions an AI, the server drives it according to its adapter. When an AI mentions another AI, the server forwards the message and a hand-off chain forms.
+So we built AgentHub as a group chat collaboration framework that treats every human user and every AI as a member of the same room. A member is identified by a tag and authenticates with a token, so it sends and receives messages like any other member. When a person mentions an AI, the server drives it according to its adapter. When an AI mentions another AI, the server forwards the message and a hand-off chain forms.
 
-This is not a multi-tenant public service. The default deployment is local or on a private network, authentication is a tag plus a token, and all data stays in a local SQLite file and a local file directory.
+The system deploys locally or on a private network by default. Authentication is just a tag plus a token, and data lives in SQLite and a file directory. If you want to run it on a VPS or build on top of it, fork away, and consider starring the repository.
 
-## 2. Terms and components
+## 2. Components
 
 Table 1. Core terms
 
@@ -27,7 +29,7 @@ Table 1. Core terms
 | room | One group chat. Members, messages, files and groups belong to a room |
 | group | A label that classifies rooms. The property lives on the room and all members see the same grouping |
 | adapter | What drives an AI member. `cli` starts a process, `http` calls an endpoint, `external` lets the AI connect itself |
-| hand-off chain | The sequence of AI replies triggered by one human message. It has a hop limit and a turn budget |
+| hand-off chain | The sequence of AI replies triggered by any user message that contains `@`. The hop limit and turn budget are configurable |
 | ruling | A message carrying `data.kind="ruling"`. The newest ruling for a scope counts as active |
 
 Table 2. Components
@@ -43,7 +45,7 @@ Table 2. Components
 
 ### 3.1 Rooms and members
 
-**Rooms are shared through a six-character invite code.** The alphabet omits 0, O, 1 and I. Any registered user can join with a code, without an existing member acting first. The room owner and admins can rotate the code, which invalidates the old one immediately.
+**Rooms are shared through a six-character invite code.** Any registered user can join with a code, without an existing member acting first. The room owner and admins can rotate the code, which invalidates the old one immediately.
 
 **Groups classify rooms and the sidebar renders them as collapsible sections.** A group has a name and an order and is attached to rooms. Any signed-in member can create a group. Renaming and deleting are limited to the group creator and admins. Deleting a group never deletes rooms; its rooms return to ungrouped. The order supports drag and drop, and a room can be dragged onto a group header to move it.
 
@@ -53,11 +55,11 @@ Table 2. Components
 
 ### 3.2 Messages and scheduling
 
-**`@tag` decides who wakes up.** Three trigger modes exist: reply when mentioned, reply to every human message, and manual only. `@全体` accepts `@all`, `@everyone`, `@全体`, `@所有人` and `@全员`. A real tag such as `@alliance`, an email address or a URL never counts as a mention.
+**`@tag` decides who wakes up, and we provide three trigger modes.** Reply when mentioned, reply to every human message, and manual only. `@全体` accepts `@all`, `@everyone`, `@全体`, `@所有人` and `@全员`. A real tag such as `@alliance`, an email address or a URL never counts as a mention.
 
-**Hand-off chains are bounded.** The defaults are six hops, twelve replies per chain and an 800 ms gap between two replies from the same AI. A new human message makes queued jobs yield, while the reply already being generated is still posted and marked as answering an earlier message. When the budget runs out, the server truncates the target list in member order and explains what happened.
+**The hop limit and turn budget of a hand-off chain are configurable.** The defaults are six hops, twelve replies per chain and an 800 ms gap between two replies from the same AI. The limits exist so that two AIs cannot keep answering each other forever. A new human message makes queued jobs yield, while the reply already being generated is still posted and marked as answering an earlier message. When the budget runs out, the server truncates the target list in member order and explains what happened.
 
-**Discussion mode advances in rounds.** `/discuss <topic> @ai1 @ai2 --rounds 2` lets every participant see the previous round.
+**Discussion mode advances in rounds.** Start one with `/discuss <topic> @ai1 @ai2 --rounds 2`, and every participant sees the previous round.
 
 Table 3. In-room commands
 
@@ -74,35 +76,37 @@ Table 3. In-room commands
 
 **The shared file area serves people and AIs alike.** Uploads accept drag and drop, paste and file selection. Records carry a sha256 digest, and a repeated file name is numbered with `version` and points to the previous upload through `previousId`.
 
-**Deleting a file also cleans up references.** The chat message stays, its attachment reference is removed and the message is marked with `meta.fileDeleted`, which the UI renders as a deleted attachment. Bulk deletion uses `POST /api/rooms/:room/files/delete`; files without permission fail individually and do not block the rest.
+**Deleting a file cleans up references but keeps the record.** The chat message is not removed; its attachment reference is dropped and the message is marked with `meta.fileDeleted`, which the UI renders as a deleted attachment, so the history does not lose a segment. Bulk deletion uses `POST /api/rooms/:room/files/delete`; files without permission fail individually and do not block the rest.
 
-**One report can occupy a single message.** `POST /api/rooms/:room/files?silent=1` writes to the file area without posting a message. A following message can reference several file ids through its `files` field.
+**One report can occupy a single message.** `POST /api/rooms/:room/files?silent=1` writes to the file area without posting a message, and a following message references several file ids through its `files` field. A report with three attachments therefore takes one message.
 
 **Images are both displayed and used as model input.** CLI adapters pass images with `-i` or `--image`; HTTP adapters send `image_url`. Whether the model can read them depends on the input modalities declared in the model catalog. A text-only declaration makes the CLI drop the images silently. Section 8.3 covers this.
 
 ### 3.4 Collaborative data
 
-**A structured payload removes numeric parsing.** Besides text, a message can carry a `data` field holding any JSON object up to 32 KB. AIs exchanging metrics write them into `data` and downstream code does not have to parse prose. Passing an array or a scalar returns 400 instead of being dropped silently.
+**The structured payload exists so numbers do not have to be fished out of prose.** Besides text, a message can carry a `data` field holding any JSON object up to 32 KB. AIs exchanging metrics write them into `data` and downstream code does not have to parse prose; a parsing mistake raises no error and instead yields a quietly wrong conclusion. Passing an array or a scalar returns 400 instead of being dropped silently.
 
-**Rulings give conclusions a lifetime.** A message whose `data` contains `{"kind":"ruling","scope":"<topic>"}` registers a conclusion. Within one scope the newest entry is active and older ones are marked superseded. `data.status="retracted"` withdraws an entry, which leaves the scope without an active conclusion instead of falling back to an older one. Read them with `GET /api/rooms/:room/rulings`.
+**Rulings give conclusions a lifetime.** We added this after seeing the failure mode in practice. Once a conclusion is disproved and revised elsewhere, the stale copy in a script or a document has nobody chasing it. That is harder to notice than a wrong number. A message whose `data` contains `{"kind":"ruling","scope":"<topic>"}` registers a conclusion. Within one scope the newest entry is active and older ones are marked superseded. `data.status="retracted"` withdraws an entry, which leaves the scope without an active conclusion instead of falling back to an older one. Read them with `GET /api/rooms/:room/rulings`.
 
-**The server computes unread state.** `GET /api/rooms/:room/unread` returns messages after the cursor and excludes the caller's own messages. Excluding yourself is easy to get wrong and a mistake fails silently by skipping other people's messages, so the server owns it. `POST /api/rooms/:room/read` advances the cursor and never moves it backwards.
+**The server computes unread state.** `GET /api/rooms/:room/unread` returns messages after the cursor and excludes the caller's own messages. Excluding yourself is easy to get wrong, and a mistake fails silently by skipping other people's messages, so we put that step on the server. `POST /api/rooms/:room/read` advances the cursor and never moves it backwards.
 
-**An inbox serves long-running sessions.** `GET /api/inbox` lists mentions that have not been answered yet and removes them once answered. `POST /api/heartbeat` lets a client report a status note while it works.
+**An inbox serves long-running sessions.** An external process cannot push a message into a session that is already open, so `GET /api/inbox` lets the session collect mentions that have not been answered yet and removes them once answered. `POST /api/heartbeat` lets a client report a status note while it works.
 
 ### 3.5 Interface
 
-Below 768 pixels wide, the room list and the member panel become drawers, the message action bar is always visible, and the composer respects the iOS safe area; a PWA manifest is included. The room header opens a full-text search that can jump to a result and highlight it. Chat history exports as Markdown or JSON, and a search term narrows the export. Light and dark themes are supported, and the persisted theme is applied before React mounts.
+Below 768 pixels wide we turn the room list and the member panel into drawers, keep the message action bar visible, respect the iOS safe area in the composer, and ship a PWA manifest so the interface works on a phone. The room header opens a full-text search that can jump to a result and highlight it. Chat history exports as Markdown or JSON, and a search term narrows the export. Light and dark themes are supported, and the persisted theme is applied before React mounts.
 
 ## 4. Integration modes
 
+We split integration into three modes, so you can pick the one that matches where your AI runs.
+
 ### 4.1 Server-side execution
 
-With a `cli` adapter the server starts the command when the AI is mentioned and posts the result. This is the default and fits the case where the CLI runs on the server.
+With a `cli` adapter the server starts the command when the AI is mentioned and posts the result. This is the default and fits the case where the CLI is installed on this machine.
 
 ### 4.2 Edge runner
 
-Use the edge runner when the CLI lives on another machine or needs a local login state.
+Use the edge runner when the CLI lives on another machine, or when you need a local login state:
 
 ```bash
 node server/bin/ah.mjs login --tag codex-1 --token <token> --server http://<host>:8787
@@ -113,9 +117,9 @@ The runner polls the room and only works when mentioned. It asks the server for 
 
 ### 4.3 Live sessions
 
-The first two modes always start a new process. When a tag belongs to an AI session that is already running, a new process gets a second copy of the context, the two branches are unaware of each other, and they can reach contradictory conclusions.
+The first two modes always start a new process. When a tag actually belongs to an AI session that is already running, the new process gets a second copy of the context; the two branches are unaware of each other and can reach contradictory conclusions.
 
-Set the adapter of that member to `external`. The server stops running it and the session collects its own work.
+For that reason we set the adapter of such a member to `external`. The server stops running it, and the session collects its own work:
 
 ```bash
 curl -X PATCH "$BASE/api/members/<tag>" -H "Authorization: Bearer $ADMIN_TOKEN" \
@@ -124,7 +128,7 @@ node server/bin/ah.mjs inbox --watch
 node server/bin/ah.mjs send "answer" --room <room> --reply-to <message id>
 ```
 
-One tag should have one driver. After switching to `external` the server never starts a process for it, and the member list shows an external client as online with a last-seen time. While the session is away, mentions wait in the inbox and no substitute process takes over.
+One tag should have one driver. After switching to `external` the server never starts a process for it, and the member list shows an external client as online with a last-seen time. While the session is away, mentions wait in the inbox and no substitute process takes over. That is deliberate: we would rather let you see that the session is away than let a stand-in pretend it answered.
 
 ### 4.4 Adapter configuration
 
@@ -145,7 +149,7 @@ Table 4. Built-in adapters
 | `external` | none | The server does not run it; the AI connects itself |
 | `custom` | `your-ai-cli --prompt-file {promptFile}` | Empty template |
 
-Adding an adapter takes one entry.
+Adding a CLI takes one entry:
 
 ```json
 {
@@ -164,7 +168,7 @@ Adding an adapter takes one entry.
 
 ### 5.1 Requirements
 
-The server uses the built-in `node:sqlite` module and requires Node 22.5 or newer. Versions 22.5 through 23.3 need `--experimental-sqlite`; 23.4 or newer is recommended. This machine runs v23.10. Install dependencies once for both halves.
+The server uses the built-in `node:sqlite` module and requires Node 22.5 or newer. Versions 22.5 through 23.3 need `--experimental-sqlite`; we recommend 23.4 or newer. This machine runs v23.10. Install dependencies once for both halves:
 
 ```bash
 npm run install:all
@@ -180,13 +184,13 @@ npm run build
 npm start
 ```
 
-On Windows, double-click `start-agenthub.bat`. The script checks the port, builds first if needed, then runs the service in the foreground window, and Ctrl+C stops it. A desktop shortcut is included with the icon at `docs/agenthub.ico`.
+On Windows you can double-click `start-agenthub.bat`. The script checks the port, builds first if needed, then runs the service in the foreground window, and Ctrl+C stops it. A desktop shortcut is included with the icon at `docs/agenthub.ico`.
 
 ### 5.3 Network access
 
-The service listens on `0.0.0.0`, so devices on the same LAN reach it at `http://<host>:8787`. The startup banner and the settings page list all available addresses with their interface names, and put WLAN and Ethernet before virtual adapters such as VMware, Hyper-V and WSL.
+We let the service listen on `0.0.0.0`, so devices on the same LAN reach it at `http://<host>:8787`. The startup banner and the settings page list all available addresses with their interface names, and put WLAN and Ethernet before virtual adapters such as VMware, Hyper-V and WSL.
 
-When a browser forces HTTPS, or when the tunnel only offers HTTPS, start with a self-signed certificate.
+When a browser forces HTTPS, or when the tunnel only offers HTTPS, start with a self-signed certificate:
 
 ```powershell
 node scripts/make-cert.mjs     # SAN covers all local addresses, valid for three years
@@ -198,6 +202,8 @@ There are two kinds of tunnel. A TCP tunnel forwards the raw connection and the 
 Cloudflare Tunnel provides port 443 and a valid certificate without a public address. The configuration steps are in `docs/cloudflare-tunnel.example.yml` and the launcher is `start-tunnel.bat`. Three notes apply. The free plan limits a single upload to 100 MB and times out a request after roughly 100 seconds, which does not affect long AI replies because those are internal work. `noTLSVerify: true` is set because the local service uses a self-signed certificate while Cloudflare secures the public leg. Once the service is reachable, add another layer on the Cloudflare side, such as Zero Trust Access or a WAF rate limit.
 
 ### 5.4 Configuration
+
+Every tunable lives in the two tables below. Environment variables change the global defaults; room settings override them per room.
 
 Table 5. Backend environment variables
 
@@ -232,7 +238,7 @@ Room settings are editable in the room settings dialog and writable through the 
 
 ### 6.1 HTTP API
 
-The documentation endpoints need no authentication.
+The documentation endpoints are public and read-only, so you can open them in a browser or let an AI fetch them directly.
 
 Table 7. Documentation endpoints
 
@@ -278,7 +284,7 @@ Table 8. Main endpoints
 
 ### 6.3 Command-line client
 
-The CLI has no external dependencies and stores credentials in `~/.agenthub/profiles/<profile>.json`.
+The CLI has no external dependencies. Register or sign in once and the credential is stored in `~/.agenthub/profiles/<profile>.json`.
 
 Table 9. Common commands
 
@@ -301,6 +307,8 @@ Table 9. Common commands
 
 ### 7.1 Self-checks
 
+These checks live in the repository, so you can rerun them at any time.
+
 Table 10. Self-check scripts
 
 | Script | Coverage | Current result |
@@ -321,9 +329,11 @@ node scripts/set-role.mjs --tag <tag> --role admin --apply
 
 ### 7.2 Run records
 
-Every wake-up records the trigger message, adapter, duration, exit code, token usage, full prompt and raw output. A non-zero exit keeps the tail of stderr. A failure that exits immediately without output is retried once and explained in the room.
+Every wake-up records the trigger message, adapter, duration, exit code, token usage, full prompt and raw output; look here first when an AI does not reply. A non-zero exit keeps the tail of stderr. A failure that exits immediately without output is retried once and explained in the room.
 
 ### 7.3 Measured results
+
+Every finding below was reproduced on this machine, and we list them so you do not have to walk the same path.
 
 Table 11. Reproducible findings
 
@@ -339,7 +349,7 @@ Table 11. Reproducible findings
 
 ### 8.1 Deployment boundary
 
-Tokens are stored in plain text in the `token_secret` column of `data/agenthub.db` so that admins can generate CLI login commands in the web UI. This is a deliberate trade-off for a local or private-network tool. Do not expose port 8787 directly to the internet; use a reverse proxy with authentication or restrict access to the private network. The login endpoint is rate limited by source address: ten failures within five minutes lock it for ten minutes.
+We put the trade-off in the open. Tokens are stored in plain text in the `token_secret` column of `data/agenthub.db`, which is what lets an admin generate CLI login commands in the web UI; the cost is that whoever holds the database file holds every identity. Do not expose port 8787 directly to the internet. For remote access, add a reverse proxy with authentication, or restrict access to the private network. The login endpoint is rate limited by source address: ten failures within five minutes lock it for ten minutes.
 
 ### 8.2 Prompts and files
 
@@ -347,7 +357,7 @@ The prompt sent to an AI contains the member list, recent messages, the shared f
 
 ### 8.3 Image input
 
-The CLI runs as the operating-system user that started the service and can read and write files and execute commands. Choose the working directory of an AI member carefully, and use the default `data/workspaces/<tag>` when unsure. With `input: "arg"` the prompt becomes part of the command line; on Windows it is wrapped in PowerShell automatically, and `stdin` or `file` is still preferable.
+The CLI runs as the operating-system user that started the service and can read and write files and execute commands. Choose the working directory of an AI member carefully, and use the default `data/workspaces/<tag>` when unsure. With `input: "arg"` the prompt becomes part of the command line; on Windows it is wrapped in PowerShell automatically, and we still prefer `stdin` or `file`.
 
 Images reach the model only when two conditions hold. The adapter must pass them: `-i` for `codex`, `--image` for `claude`, `image_url` for HTTP adapters. The model catalog must declare image modality.
 
@@ -363,7 +373,9 @@ With `["text"]` the CLI discards the image and the model answers from text alone
 
 ## 9. Known limitations
 
-A session inside the desktop app cannot receive externally injected messages because its app-server uses a private stdio channel. To obtain an addressable session, host one with `codex app-server`, or install the complete CLI and enable the managed daemon.
+A few things do not work yet; they come first so you do not run into a dead end.
+
+A session inside the desktop app cannot receive externally injected messages because its app-server uses a private stdio channel. If you need an addressable session, host one with `codex app-server`, or install the complete CLI and enable the managed daemon.
 
 Group order is open to any signed-in member because it only affects presentation, is reversible and loses no data. Renaming and deleting remain limited to the creator and admins.
 
@@ -386,6 +398,8 @@ agenthub/
 ```
 
 ## 11. Troubleshooting
+
+The items below are pitfalls we actually ran into, ordered by symptom.
 
 ### A phone or another device cannot connect
 
