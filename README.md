@@ -317,6 +317,8 @@ CLI 无外部依赖。你注册或登录一次，凭据就保存在 `~/.agenthub
 | --- | --- | --- |
 | `scripts/e2e-test.mjs` | 注册登录、建房加人、消息与唤醒、接力上限、迟到回帖、文件、CLI、暂停恢复、讨论、邀请码、外部在线状态、导出、收件箱、结构化数据、裁定、未读游标、分组、解散房间 | 81 项通过（2026 年 9 月 22 日） |
 | `scripts/ui-test.mjs` | 真实浏览器驱动注册入群、发消息、AI 回帖、图片预览、文件面板、主题、气泡形状 | 16 项通过 |
+| `scripts/i18n-audit.mjs` | 代码里的 `t('key')` 与两份词条表互相核对，并校验服务端系统消息模板都有词条 | 中英各 0 缺失 |
+| `scripts/i18n-verify.mjs` | 临时账号 + 临时房间跑真实页面：中文默认、切英文、系统消息、六个弹窗、无中文残留 | 39 项通过 |
 | `scripts/prune-test-members.mjs` | 清理自检留下的空号与测试房间，默认只预览 | 手动执行 |
 | `scripts/prune-orphan-files.mjs` | 清理房间已删而文件仍在磁盘的孤儿目录 | 手动执行 |
 | `scripts/set-role.mjs` | 修改成员角色，默认只预览 | 手动执行 |
@@ -324,6 +326,8 @@ CLI 无外部依赖。你注册或登录一次，凭据就保存在 `~/.agenthub
 ```bash
 node scripts/e2e-test.mjs --server https://127.0.0.1:8787   # 后端端到端
 node scripts/ui-test.mjs --launch --app https://127.0.0.1:8787
+node scripts/i18n-audit.mjs                                  # 词条完整性
+node scripts/i18n-verify.mjs                                 # 双语界面验收
 node scripts/prune-test-members.mjs --apply
 node scripts/prune-orphan-files.mjs --apply
 node scripts/set-role.mjs --tag <tag> --role admin --apply
@@ -460,6 +464,15 @@ start-tunnel.bat
 AH_PORT=9000 npm run dev
 npm run dev:web -- --port 5174
 ```
+
+### 服务进程突然消失（退出码 3221225477）
+
+这个码是 Windows 的 `0xC0000005`（访问冲突），属于原生层崩溃：进程直接消失，不留 JS 堆栈。排查手段有两个。
+
+- 黑匣子：服务会把最近 240 条动作写进 `data/tmp/flight-recorder.json`（请求、广播、起子进程、删房间的每一步），守护进程 `serve-forever` 在子进程非正常退出时，自动把最后十几条打进 `logs/serve-forever.log`。看「崩溃现场」那一段就知道最后在处理什么。
+- 若还看不出，再抓原生 dump：给 `node.exe` 配 WER `LocalDumps`（或挂 procdump），复现后用调试器看崩溃线程栈。这一步需要改注册表，属于系统级操作。
+
+顺带说明：适配器探测以前是同步 spawn `where.exe`（13 个适配器 ≈ 1.8 秒事件循环阻塞，历史上留下 4 万次进程创建），现在改为纯 JS 的 PATH 查找，探测从 1800ms 降到亚毫秒级，健康检查也不再因此判失败。
 
 ### 想清空数据
 

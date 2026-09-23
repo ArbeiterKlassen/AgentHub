@@ -93,6 +93,15 @@ agent_runs(id PK, room_id, agent_tag, trigger_msg, chain_id, hop, status, adapte
 
 代价：要求 Node ≥ 22.5，且启动时会打印一条 `ExperimentalWarning`（功能本身稳定可用）。
 
+两个工程上的补丁与它相关：
+
+- **开库重试**：桌面图标可以被点第二次，两个进程会同时开同一个库，后到的那个在建表事务上拿到 `SQLITE_BUSY`。`getDb()` 因此设了 `busy_timeout=5000` 并做有限重试（最长等 10 秒），避免「服务启动 1 秒就退出」。
+- **黑匣子**：原生的访问冲突（退出码 3221225477 / `0xC0000005`）不留 JS 堆栈，所以服务把最近 240 条动作写进 `data/tmp/flight-recorder.json`（`record()` 只写内存，2 秒刷盘一次；删房间、杀子进程这类危险动作前调 `flushNow()` 立刻落盘），守护进程在子进程异常退出时把尾部打进日志。
+
+## 命令解析不 spawn 进程
+
+适配器探测要为每个 CLI 查一次「这个命令在哪」。早期实现是同步 `execFileSync('where.exe')`：13 个适配器约 1.8 秒事件循环阻塞，守护进程 3 秒超时的 `/api/health` 因此频繁误判，日志里还积累了约 4 万次 `where.exe` 进程创建。现在 `whichSync()` 直接用 `PATH` + `PATHEXT` 在进程内查找（处理引号段与 `%VAR%` 展开），探测降到亚毫秒级，且不再有任何进程创建。
+
 ## 可扩展点
 
 - **接新 CLI**：加一条 `adapters.json`，无需改代码。

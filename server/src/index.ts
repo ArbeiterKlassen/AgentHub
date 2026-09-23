@@ -23,8 +23,12 @@ import { broadcast, subscribe, unsubscribe, type HubEvent } from './hub.js';
 import { loadAdapters } from './adapters.js';
 import { readApiDoc, readLlmsTxt, renderDocsPage } from './docs.js';
 import { openapiSpec } from './openapi.js';
+import { startFlightRecorder } from './flightRecorder.js';
 
 ensureDirs();
+
+// 黑匣子：记最近动作，专治「进程直接消失、不留 JS 堆栈」的原生崩溃（0xC0000005）
+startFlightRecorder();
 
 // 上次进程被杀掉时，正在跑的 agent_runs 会永远停在 running（子进程随父进程退出，没人再收尾）。
 // 启动时统一标记为「中断」，否则界面上会一直显示"思考中/队列里还有任务"。

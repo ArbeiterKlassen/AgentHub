@@ -315,6 +315,8 @@ Table 10. Self-check scripts
 | --- | --- | --- |
 | `scripts/e2e-test.mjs` | Registration and login, rooms, messages and mentions, hop limits, late replies, files, CLI, pause and resume, discussion, invite codes, external presence, export, inbox, structured data, rulings, unread cursor, groups, room deletion | 81 of 81 passed (22 September 2026) |
 | `scripts/ui-test.mjs` | Browser-driven registration, messaging, AI reply, image preview, file panel, theme, message bubble shape | 16 of 16 passed |
+| `scripts/i18n-audit.mjs` | Cross-checks every `t('key')` in the code against both locale tables, plus the server system-message templates | 0 missing keys in zh-CN and en-US |
+| `scripts/i18n-verify.mjs` | Temporary account and room in a real browser: Chinese default, English switch, system messages, six dialogs, no leftover Chinese | 39 of 39 passed |
 | `scripts/prune-test-members.mjs` | Remove leftover test accounts and rooms; preview by default | Run manually |
 | `scripts/prune-orphan-files.mjs` | Remove file directories whose room no longer exists | Run manually |
 | `scripts/set-role.mjs` | Change a member role; preview by default | Run manually |
@@ -322,6 +324,8 @@ Table 10. Self-check scripts
 ```bash
 node scripts/e2e-test.mjs --server https://127.0.0.1:8787
 node scripts/ui-test.mjs --launch --app https://127.0.0.1:8787
+node scripts/i18n-audit.mjs
+node scripts/i18n-verify.mjs
 node scripts/prune-test-members.mjs --apply
 node scripts/prune-orphan-files.mjs --apply
 node scripts/set-role.mjs --tag <tag> --role admin --apply
@@ -458,6 +462,15 @@ Lower the room `maxHops`, switch the members to reply only when mentioned, or se
 AH_PORT=9000 npm run dev
 npm run dev:web -- --port 5174
 ```
+
+### The service process disappears (exit code 3221225477)
+
+That code is Windows `0xC0000005`, an access violation: a native crash, so the process dies without a JS stack. Two ways to investigate.
+
+- Flight recorder: the service keeps its last 240 actions in `data/tmp/flight-recorder.json` (requests, broadcasts, child-process spawns, every step of a room deletion), and `serve-forever` prints the final entries into `logs/serve-forever.log` whenever the child exits abnormally. The "crash site" block shows what it was doing last.
+- If that is not enough, capture a native dump: configure WER `LocalDumps` for `node.exe` (or attach procdump) and inspect the faulting stack after reproducing the crash. This touches the registry, so it is a system-level change.
+
+Related: adapter probing used to spawn `where.exe` synchronously (13 adapters ≈ 1.8 s of blocked event loop, and 40k process creations on record). It now resolves PATH entries in plain JavaScript, which takes sub-millisecond time and no longer makes the health check fail.
 
 ### Resetting all data
 

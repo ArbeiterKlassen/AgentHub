@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { DB_PATH, ensureDirs } from './env.js';
+import { flushNow, record } from './flightRecorder.js';
 
 export interface MemberRow {
   tag: string;
@@ -109,12 +110,45 @@ let db: DatabaseSync | null = null;
 export function getDb(): DatabaseSync {
   if (db) return db;
   ensureDirs();
-  db = new DatabaseSync(DB_PATH);
-  db.exec('PRAGMA journal_mode = WAL');
-  db.exec('PRAGMA foreign_keys = ON');
-  migrate(db);
+  db = openWithRetry();
   ensureRoomCodes();
   return db;
+}
+
+/** 同步等待（SQLite 打开重试用；不引入 async 传染） */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * 打开数据库。
+ *
+ * 为什么不是直接 `new DatabaseSync()`：桌面图标可以点第二次、守护进程也可能刚拉过一个子进程，
+ * 于是两个进程会同时开同一个库。第一个进程在建表（写事务）时，第二个进程拿到的是
+ * `database is locked`（SQLITE_BUSY），历史上表现为「服务刚启动 1 秒就 code=1 退出」，
+ * 然后守护进程无限重启。这里加 busy_timeout + 有限重试：等前一个进程建完表，再照常打开。
+ */
+function openWithRetry(): DatabaseSync {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    try {
+      const d = new DatabaseSync(DB_PATH);
+      // busy_timeout 必须在第一次写之前生效：WAL + 5 秒等待，够另一个进程建完表
+      d.exec('PRAGMA busy_timeout = 5000');
+      d.exec('PRAGMA journal_mode = WAL');
+      d.exec('PRAGMA foreign_keys = ON');
+      migrate(d);
+      return d;
+    } catch (err) {
+      const code = (err as { errcode?: number }).errcode;
+      // 5 = SQLITE_BUSY，6 = SQLITE_LOCKED
+      if ((code === 5 || code === 6) && Date.now() < deadline) {
+        sleepSync(200);
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 function migrate(d: DatabaseSync): void {
@@ -845,6 +879,8 @@ export function roomArtifactCounts(roomId: string): RoomArtifactCounts {
 export function purgeRoomRows(roomId: string): RoomArtifactCounts {
   const d = getDb();
   const counts = roomArtifactCounts(roomId);
+  record('db.purge.begin', `${roomId} messages=${counts.messages} files=${counts.files}`);
+  flushNow();
   d.exec('BEGIN');
   try {
     d.prepare('DELETE FROM room_members WHERE room_id = ?').run(roomId);
@@ -857,6 +893,7 @@ export function purgeRoomRows(roomId: string): RoomArtifactCounts {
     d.exec('ROLLBACK');
     throw err;
   }
+  record('db.purge.done', roomId);
   return counts;
 }
 

@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync, spawn } from 'node:child_process';
 import { ADAPTERS_FILE, ADAPTERS_OVERRIDE_FILE, REPO_ROOT } from './env.js';
 
 export interface AdapterPreset {
@@ -101,20 +100,41 @@ export function substitute(template: string, vars: Record<string, string>): stri
   return out;
 }
 
-function findExecutable(command: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    const isWin = process.platform === 'win32';
-    const probe = isWin ? 'where.exe' : 'which';
-    const child = spawn(probe, [command], { windowsHide: true });
-    let out = '';
-    child.stdout.on('data', (d) => (out += String(d)));
-    child.on('error', () => resolve(null));
-    child.on('close', (code) => {
-      if (code !== 0) return resolve(null);
-      const first = out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)[0];
-      resolve(first ?? null);
-    });
-  });
+/**
+ * 纯 JS 版 where / which：**不 spawn 任何进程**。
+ *
+ * 之前这里调的是 `where.exe`（同步 execFileSync），每个 CLI 适配器查一次命令，
+ * 单次 40~200ms（杀毒软件还要再加一截），9 个适配器就是 ~1.8 秒的事件循环阻塞：
+ * 守护进程 3 秒超时的 /api/health 因此经常判失败，日志里还留下了 4 万次 where.exe 的进程风暴。
+ * PATH 查找本身只是「按 PATHEXT 拼名字 + 念目录」，纯 JS 做既准又快（实测 13 个适配器从 1800ms 降到 1ms 级）。
+ */
+function whichSync(command: string): string | null {
+  const isWin = process.platform === 'win32';
+  const exts = isWin
+    ? (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD')
+        .split(';')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [''];
+  const names = [command];
+  if (isWin && !/\.[a-z0-9]+$/i.test(command)) {
+    for (const ext of exts) names.push(command + ext);
+  }
+  const dirs = [process.cwd(), ...(process.env.PATH ?? '').split(path.delimiter)]
+    // PATH 里可能有 "C:\Program Files\xxx" 这种带引号的段，也可能写成 %SystemRoot%\...
+    .map((d) => expandEnvVars(d.trim().replace(/^"|"$/g, '')))
+    .filter(Boolean);
+  for (const dir of dirs) {
+    for (const name of names) {
+      const full = path.join(dir, name);
+      try {
+        if (fs.statSync(full).isFile()) return full;
+      } catch {
+        /* 这个目录里没有，继续 */
+      }
+    }
+  }
+  return null;
 }
 
 /** 展开 %VAR% / %LOCALAPPDATA% 之类的环境变量（Windows 习惯写法） */
@@ -196,15 +216,9 @@ export function resolveCommandSync(command: string, adapter?: AdapterPreset): Re
     }
   }
 
-  // PATH
-  try {
-    const probe = process.platform === 'win32' ? 'where.exe' : 'which';
-    const out = execFileSync(probe, [command], { encoding: 'utf8', windowsHide: true, timeout: 8000 });
-    const first = out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)[0];
-    if (first) return { path: preferWindowsExecutable(first), how: 'PATH' };
-  } catch {
-    /* PATH 里没有，往下找 */
-  }
+  // PATH（纯 JS 查找，不 spawn）
+  const hit = whichSync(command);
+  if (hit) return { path: preferWindowsExecutable(hit), how: 'PATH' };
 
   // 候选位置：适配器自带 + 环境变量里额外声明的
   const extra = String(process.env.AH_CLI_SEARCH_PATHS ?? '')
@@ -287,9 +301,22 @@ export async function probeAll(): Promise<AdapterProbe[]> {
 const PROBE_TTL_MS = 30_000;
 let probeCache: { at: number; list: AdapterProbe[] } | null = null;
 
-/** 强制重新探测（界面点「刷新适配器」时用） */
+/**
+ * 强制重新探测（界面点「刷新适配器」时用）。
+ * 合并同时在飞的探测：几个标签页一起刷 / 守护进程和界面撞在一起时，只跑一遍。
+ */
 export async function probeAllFresh(): Promise<AdapterProbe[]> {
-  const list = await Promise.all(loadAdapters().map((a) => probeAdapter(a)));
-  probeCache = { at: Date.now(), list };
-  return list;
+  if (probeInflight) return probeInflight;
+  probeInflight = (async () => {
+    const list = await Promise.all(loadAdapters().map((a) => probeAdapter(a)));
+    probeCache = { at: Date.now(), list };
+    return list;
+  })();
+  try {
+    return await probeInflight;
+  } finally {
+    probeInflight = null;
+  }
 }
+
+let probeInflight: Promise<AdapterProbe[]> | null = null;

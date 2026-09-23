@@ -84,6 +84,28 @@ async function healthOk(timeoutMs = 3000) {
   }
 }
 
+/**
+ * 子进程非正常退出时，把服务自己写的「黑匣子」尾部打进日志。
+ * 原生的访问冲突（0xC0000005）不会留 JS 堆栈，只能靠这份「最后做了什么」定位。
+ */
+function dumpFlightRecorder(code, upSeconds) {
+  try {
+    const file = path.join(process.env.AH_DATA_DIR ?? path.join(REPO, 'data'), 'tmp', 'flight-recorder.json');
+    if (!fs.existsSync(file)) return;
+    const snap = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const entries = Array.isArray(snap.entries) ? snap.entries.slice(-14) : [];
+    if (!entries.length) return;
+    log(`—— 崩溃现场（黑匣子，进程存活 ${upSeconds}s，退出码 ${code}）——`);
+    for (const e of entries) {
+      const age = Math.max(0, Math.round(((snap.writtenAt ?? Date.now()) - e.ts) / 100) / 10);
+      log(`   ${String(age).padStart(6)}s 前  ${e.kind}  ${e.detail}`);
+    }
+    log('—— 黑匣子结束 ——');
+  } catch (err) {
+    log(`（读黑匣子失败：${err instanceof Error ? err.message : String(err)}）`);
+  }
+}
+
 function startChild() {
   const out = fs.openSync(outFile, 'a');
   const err = fs.openSync(errFile, 'a');
@@ -101,6 +123,7 @@ function startChild() {
     lastExitAt = Date.now();
     const upSeconds = child?.__startedAt ? Math.round((Date.now() - child.__startedAt) / 1000) : 0;
     log(`⚠️ 服务进程退出（code=${code}, signal=${signal ?? '-'}，存活 ${upSeconds}s）`);
+    if (code !== 0 || signal) dumpFlightRecorder(code, upSeconds);
     if (restarts >= MAX_RESTARTS) {
       log(`已达到最大重启次数（${MAX_RESTARTS}），守护进程退出`);
       process.exit(1);

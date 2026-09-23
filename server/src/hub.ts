@@ -1,3 +1,5 @@
+import { record } from './flightRecorder.js';
+
 export type AgentStatus = 'offline' | 'idle' | 'thinking' | 'error';
 
 export interface HubEvent {
@@ -86,6 +88,7 @@ export function onlineTags(): string[] {
 }
 
 export function broadcast(event: HubEvent): void {
+  record('broadcast', `${event.type}${event.roomId ? ` room=${event.roomId}` : ''} subs=${subscribers.size}`);
   for (const sub of subscribers.values()) {
     if (event.roomId) {
       // 语义：rooms 是静态白名单，filter 是动态谓词，两者同时存在时取「交集」。

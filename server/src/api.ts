@@ -90,6 +90,7 @@ import {
 import { parseMentions } from './prompt.js';
 import { sha256 } from './db.js';
 import { DATA_DIR, PORT, REPO_ROOT, lanAddresses } from './env.js';
+import { flushNow, record } from './flightRecorder.js';
 import { check as rateCheck, recordFailure as rateFail, recordSuccess as rateOk } from './rateLimit.js';
 
 /** 取来源 IP（经过 Cloudflare Tunnel 时优先用 CF 带过来的真实 IP） */
@@ -188,6 +189,8 @@ type Handler = (req: Request, res: Response) => unknown | Promise<unknown>;
 const wrap =
   (fn: Handler) =>
   (req: Request, res: Response): void => {
+    /** 黑匣子：每个请求都留一条，崩溃后能看出最后在处理哪次调用 */
+    record('http', `${req.method} ${req.originalUrl ?? req.url}`);
     const fail = (err: unknown): void => {
       if (res.headersSent) return;
       const status = err instanceof HttpError ? err.status : 500;
@@ -845,15 +848,24 @@ export function buildApiRouter(): Router {
       }
       const keepFiles = req.query.keepFiles === '1' || req.query.keepFiles === 'true';
       const before = roomArtifactCounts(room.id);
+      record('room.delete.begin', `${room.id} keepFiles=${keepFiles} by=@${me.tag}`);
+      flushNow();
       // 1) 先掐掉调度器里这个房间的排队任务与讨论链，免得任务继续跑、往不存在的房间发言
       const runtime = purgeRoomRuntime(room.id);
       // 2) 再删磁盘上的共享文件（默认彻底删；keepFiles=1 时留着）
+      record('room.delete.disk', `${room.id} keepFiles=${keepFiles}`);
+      flushNow();
       const disk = keepFiles
         ? { files: 0, bytes: 0, dir: path.join(DATA_DIR, 'files', room.id), dirRemoved: false, kept: true as const }
         : { ...purgeRoomFiles(room.id), kept: false as const };
       // 3) 最后清数据库：成员关系、消息、文件记录、AI 运行记录、房间本身（同一个事务）
+      record('room.delete.rows', room.id);
+      flushNow();
       const rows = purgeRoomRows(room.id);
+      record('room.delete.broadcast', room.id);
       broadcast({ type: 'room.deleted', roomId: room.id, data: { id: room.id, name: room.name }, ts: Date.now() });
+      record('room.delete.done', `${room.id} messages=${rows.messages} files=${disk.files}`);
+      flushNow();
       console.log(
         `[room] @${me.tag} 解散了「${room.name}」：消息 ${rows.messages} 条、成员 ${rows.members} 个、` +
           `文件 ${rows.files} 个（磁盘 ${disk.files} 个 / ${Math.round(disk.bytes / 1024)} KB）${

@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import type { Request, Response } from 'express';
 import { FILES_DIR, UPLOAD_MAX_BYTES } from './env.js';
+import { flushNow, record } from './flightRecorder.js';
 import {
   deleteFile,
   getFile,
@@ -194,8 +195,11 @@ export function purgeRoomFiles(roomId: string): {
   const inside = (target: string): boolean => path.resolve(target).startsWith(root);
   let files = 0;
   let bytes = 0;
+  const rows = listFiles(roomId);
+  record('fs.purge.begin', `${roomId} rows=${rows.length} dir=${path.join(FILES_DIR, roomId)}`);
+  flushNow();
 
-  for (const row of listFiles(roomId)) {
+  for (const row of rows) {
     try {
       if (!fs.existsSync(row.stored_path)) continue;
       if (!inside(row.stored_path)) {
@@ -203,6 +207,7 @@ export function purgeRoomFiles(roomId: string): {
         continue;
       }
       bytes += fs.statSync(row.stored_path).size;
+      record('fs.rm', row.stored_path);
       fs.rmSync(row.stored_path, { force: true });
       files += 1;
     } catch (err) {
@@ -214,6 +219,8 @@ export function purgeRoomFiles(roomId: string): {
   let dirRemoved = false;
   try {
     if (inside(path.join(dir, 'x')) && fs.existsSync(dir)) {
+      record('fs.rmdir', dir);
+      flushNow();
       fs.rmSync(dir, { recursive: true, force: true });
       dirRemoved = true;
     }
@@ -221,6 +228,7 @@ export function purgeRoomFiles(roomId: string): {
     console.warn(`[files] 删房间目录失败：${dir}`, err);
   }
 
+  record('fs.purge.done', `${roomId} files=${files} bytes=${bytes} dirRemoved=${dirRemoved}`);
   return { files, bytes, dir, dirRemoved };
 }
 

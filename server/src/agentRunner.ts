@@ -3,6 +3,7 @@ import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { TMP_DIR } from './env.js';
 import { resolveCommandSync, substitute, type AdapterPreset } from './adapters.js';
+import { flushNow, record } from './flightRecorder.js';
 
 export interface AgentRunOptions {
   adapter: AdapterPreset;
@@ -166,9 +167,18 @@ function quoteForCmd(value: string): string {
 
 function killTree(child: ChildProcess): void {
   if (!child.pid) return;
+  record('kill-tree', `pid=${child.pid}`);
+  flushNow();
   if (process.platform === 'win32') {
     try {
-      spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+      const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+      killer.on('error', () => {
+        try {
+          child.kill();
+        } catch {
+          /* 已经没了 */
+        }
+      });
     } catch {
       child.kill();
     }
@@ -455,6 +465,8 @@ async function runCliAdapter(opts: AgentRunOptions): Promise<AgentRunResult> {
         NO_COLOR: '1',
         FORCE_COLOR: '0',
       };
+      record('spawn', `${command} ${rawArgs.join(' ')}`.trim());
+      flushNow();
       if (useShell && inputMode === 'arg') {
         // Windows 下 arg 模式走 PowerShell：提示词放进变量，避免命令行转义与注入问题
         const psArgs = rawArgs
