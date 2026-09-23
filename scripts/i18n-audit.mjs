@@ -1,8 +1,12 @@
 /**
- * 本地化审计：扫描 web/src 里用到的 t('key') / tOptional('key')，与 locales/*.json 对照。
+ * 本地化审计：扫描 web/src 里用到的 t('key') / tOptional('key')，与 web/src/locale/*.json 对照。
  *
- *   node data/tmp/i18n-audit.mjs           只看报告
- *   node data/tmp/i18n-audit.mjs --dump    额外打印所有 key（方便补词条）
+ *   node scripts/i18n-audit.mjs           只看报告
+ *   node scripts/i18n-audit.mjs --dump    额外打印所有 key（方便补词条）
+ *
+ * 语言包是自动发现的：locale/ 里放几个 JSON 就审几个。
+ * 「缺 key」是硬错误（会 exit 1）；「值还是空的」只算待翻译，不影响退出码，
+ * 因为新语言就是这样一条条翻起来的（运行时回退到 zh-CN）。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -12,7 +16,14 @@ import { fileURLToPath } from 'node:url';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const WEB = path.join(REPO, 'web');
 const SRC = path.join(WEB, 'src');
-const LOCALES = ['zh-CN', 'en-US'];
+const LOCALE_DIR = path.join(SRC, 'locale');
+const FALLBACK = 'zh-CN';
+
+const LOCALES = fs
+  .readdirSync(LOCALE_DIR)
+  .filter((f) => f.endsWith('.json') && !f.startsWith('_'))
+  .map((f) => f.replace(/\.json$/, ''))
+  .sort();
 
 const walk = (dir) =>
   fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -43,14 +54,24 @@ for (const file of walk(SRC)) {
 
 const dicts = Object.fromEntries(
   LOCALES.map((loc) => {
-    const file = path.join(SRC, 'locales', `${loc}.json`);
+    const file = path.join(LOCALE_DIR, `${loc}.json`);
     return [loc, fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {}];
   }),
 );
 
-const missingZh = [...used.keys()].filter((k) => !(k in dicts['zh-CN']));
-const missingEn = [...used.keys()].filter((k) => !(k in dicts['en-US']));
-const unusedZh = Object.keys(dicts['zh-CN']).filter((k) => !used.has(k) && !k.startsWith('system.'));
+const fallbackDict = dicts[FALLBACK] ?? dicts[LOCALES[0]] ?? {};
+const isEmpty = (v) => typeof v !== 'string' || v.trim() === '';
+
+/** 每个语言：缺 key（硬错误）与待翻译（空值，仅提示）分开算 */
+const report = LOCALES.map((loc) => {
+  const dict = dicts[loc];
+  const missing = [...used.keys()].filter((k) => !(k in dict));
+  const pending = [...used.keys()].filter((k) => k in dict && isEmpty(dict[k]));
+  return { loc, dict, missing, pending };
+});
+const unusedZh = Object.keys(fallbackDict).filter(
+  (k) => !k.startsWith('_') && !used.has(k) && !k.startsWith('system.'),
+);
 
 /* 服务端发出的系统消息模板 key（meta.i18nKind）也必须能在词条表里找到 */
 const serverKinds = new Set();
@@ -63,20 +84,38 @@ for (const file of fs.readdirSync(serverDir).filter((f) => f.endsWith('.ts'))) {
     serverKinds.add(m[2]);
   }
 }
-const missingSystemZh = [...serverKinds].filter((k) => !(`system.${k}` in dicts['zh-CN']));
-const missingSystemEn = [...serverKinds].filter((k) => !(`system.${k}` in dicts['en-US']));
+const systemMissing = LOCALES.map((loc) => ({
+  loc,
+  missing: [...serverKinds].filter((k) => !(`system.${k}` in dicts[loc])),
+}));
+const systemGap = systemMissing.filter((s) => s.missing.length);
 console.log(
-  `\n服务端系统消息模板 ${serverKinds.size} 个${missingSystemZh.length || missingSystemEn.length ? `｜缺词条 zh:${missingSystemZh.join(',') || '无'} en:${missingSystemEn.join(',') || '无'}` : '（词条齐）'}`,
+  `\n服务端系统消息模板 ${serverKinds.size} 个${
+    systemGap.length ? `｜缺词条 ${systemGap.map((s) => `${s.loc}:${s.missing.join(',')}`).join(' ')}` : '（词条齐）'
+  }`,
 );
 
+console.log(`\n语言包目录：${path.relative(REPO, LOCALE_DIR)}（共 ${LOCALES.length} 个）`);
 console.log(`代码里用到 ${used.size} 个 key`);
-for (const loc of LOCALES) console.log(`  ${loc}: ${Object.keys(dicts[loc]).length} 条词条`);
-console.log(`\n中文缺词条 ${missingZh.length} 个${missingZh.length ? '：\n  ' + missingZh.join('\n  ') : ''}`);
-console.log(`\n英文缺词条 ${missingEn.length} 个${missingEn.length ? '：\n  ' + missingEn.join('\n  ') : ''}`);
+for (const r of report) {
+  const done = used.size - r.missing.length - r.pending.length;
+  console.log(
+    `  ${r.loc.padEnd(8)} 已翻译 ${String(done).padStart(4)} / 待翻译 ${String(r.pending.length).padStart(4)} / 缺 key ${r.missing.length}`,
+  );
+}
+
+const hardErrors = report.filter((r) => r.missing.length);
+for (const r of hardErrors) {
+  console.log(`\n${r.loc} 缺词条 ${r.missing.length} 个：\n  ${r.missing.join('\n  ')}`);
+}
+const pendingAll = report.filter((r) => r.pending.length && r.loc !== FALLBACK);
+for (const r of pendingAll) {
+  console.log(`\n${r.loc} 还有 ${r.pending.length} 条待翻译（运行时回退到 ${FALLBACK}）`);
+}
 console.log(`\nJSON 里未使用 ${unusedZh.length} 个${unusedZh.length ? '：\n  ' + unusedZh.join('\n  ') : ''}`);
 
 if (process.argv.includes('--dump')) {
   console.log('\n=== 全部 key ===');
   console.log([...used.keys()].sort().join('\n'));
 }
-process.exit(missingZh.length || missingEn.length || missingSystemZh.length || missingSystemEn.length ? 1 : 0);
+process.exit(hardErrors.length || systemGap.length ? 1 : 0);

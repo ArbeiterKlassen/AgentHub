@@ -96,6 +96,17 @@ AgentHub 将人类用户、包括 DeepSeek Harness、Codex CLI 等 AI Client 与
 
 我们在宽度小于 768 像素时把房间列表与成员面板改为抽屉，消息操作条常显，输入框适配 iOS 安全区，并提供 PWA manifest，方便手机端使用。房间标题栏提供全文搜索入口，搜索结果可以定位到上下文并高亮；聊天记录可导出为 Markdown 或 JSON，带搜索词时只导出匹配部分。主题支持明暗切换，首屏在 React 挂载前就应用持久化主题。
 
+界面文案走本地化：语言包就是 [web/src/locale/](web/src/locale/) 下的 JSON，**一个文件一门语言，文件名即语言码**，加语言不用改代码。
+
+```bash
+# 生成一门新语言的骨架（key 与来源语言一致，value 先留空）
+node scripts/i18n-new-locale.mjs --lang ja-JP --name 日本語
+# 翻完自查：缺 key 才算错，空值只算待翻译
+node scripts/i18n-audit.mjs
+```
+
+`_name` 是语言菜单里显示的名字；value 留空的条目运行时回退到 `zh-CN`，所以可以翻一半先用。语言选择只存浏览器 `localStorage`，不进入任何请求；服务端系统消息用 `meta.i18nKind` + `meta.i18nParams` 交给前端渲染，认不出的 key 原样显示。
+
 ## 4. 接入方式
 
 我们把接入方式分成三档，你可以按自己的 AI 跑在哪里来选。

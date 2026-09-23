@@ -24,6 +24,13 @@ const APP = argValue('app', 'https://127.0.0.1:8787');
 /** 可选：给了管理员 token 就能连自检用的临时 AI 成员一起删掉，不给也能跑（只是留个空号） */
 const ADMIN = process.env.AH_ADMIN_TOKEN ?? '';
 const SHOT_DIR = path.join(REPO, 'data', 'tmp');
+/** 语言菜单应当列出 locale/ 下每个语言包（_name 就是菜单里显示的字） */
+const LOCALE_DIR = path.join(REPO, 'web', 'src', 'locale');
+const EXPECTED_LOCALE_NAMES = fs
+  .readdirSync(LOCALE_DIR)
+  .filter((f) => f.endsWith('.json') && !f.startsWith('_'))
+  .map((f) => JSON.parse(fs.readFileSync(path.join(LOCALE_DIR, f), 'utf8'))._name)
+  .filter(Boolean);
 const PORT = await new Promise((resolve) => {
   import('node:net').then(({ default: net }) => {
     const srv = net.createServer();
@@ -209,6 +216,19 @@ try {
   const zhText = String(await evaluate('document.body.innerText'));
   check('中文界面：侧栏标题与系统消息都是中文', zhText.includes('群聊房间') && zhText.includes('房间「') && zhText.includes('上传了文件'), '');
 
+  /* 语言菜单：locale/ 里放了几个语言包，菜单里就该有几个 */
+  await clickTitle('界面语言');
+  await sleep(500);
+  const menuText = String(await evaluate('document.body.innerText'));
+  const missingLang = EXPECTED_LOCALE_NAMES.filter((name) => !menuText.includes(name));
+  check(
+    `语言菜单列出 locale/ 下全部 ${EXPECTED_LOCALE_NAMES.length} 个语言包`,
+    missingLang.length === 0,
+    missingLang.length ? `菜单里缺：${missingLang.join('、')}` : EXPECTED_LOCALE_NAMES.join('、'),
+  );
+  await pressEscape();
+  await sleep(400);
+
   /* 中文弹窗：新建群聊 / 邀请码 / 分组 / 搜索 / 讨论 / 运行记录 */
   check(
     '中文：侧栏三个入口按钮已本地化',
@@ -291,7 +311,7 @@ try {
   check('英文界面：中文原文不再出现', !enText.includes('群聊房间') && !enText.includes('上传了文件'));
   check(
     '英文界面：右侧面板已翻译（页签 / 邀请码 / 导出 / 文件区）',
-    enText.includes('Members') && enText.includes('Room code (invite code)') && enText.includes('Export chat history'),
+    enText.includes('Members') && enText.includes('Room code') && enText.includes('Export chat history'),
   );
 
   /* 房间设置弹窗：既要是英文，又不能是长篇叙述 */

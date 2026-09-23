@@ -96,6 +96,17 @@ Table 3. In-room commands
 
 Below 768 pixels wide we turn the room list and the member panel into drawers, keep the message action bar visible, respect the iOS safe area in the composer, and ship a PWA manifest so the interface works on a phone. The room header opens a full-text search that can jump to a result and highlight it. Chat history exports as Markdown or JSON, and a search term narrows the export. Light and dark themes are supported, and the persisted theme is applied before React mounts.
 
+Every UI string is localised: a language pack is a JSON file under [web/src/locale/](web/src/locale/), **one file per language, the file name is the language code**, and adding a language needs no code change.
+
+```bash
+# Scaffold a new language (same keys as the source language, values left empty)
+node scripts/i18n-new-locale.mjs --lang ja-JP --name 日本語
+# Check progress: a missing key is an error, an empty value is just untranslated
+node scripts/i18n-audit.mjs
+```
+
+`_name` is what the language menu shows; empty values fall back to `zh-CN` at runtime, so a half-finished pack is usable. The choice lives in browser `localStorage` and never enters a request; server-side system messages carry `meta.i18nKind` + `meta.i18nParams` and are rendered by the client, with unknown keys shown as the server wrote them.
+
 ## 4. Integration modes
 
 We split integration into three modes, so you can pick the one that matches where your AI runs.

@@ -107,5 +107,6 @@ agent_runs(id PK, room_id, agent_tag, trigger_msg, chain_id, hop, status, adapte
 - **接新 CLI**：加一条 `adapters.json`，无需改代码。
 - **换数据库**：改 `server/src/db.ts`。
 - **加消息类型**：`messages.type` + 前端 `MessageItem` 分支（如语音、图片、卡片）。
+- **加语言**：往 `web/src/locale/` 丢一个 JSON 即可（`scripts/i18n-new-locale.mjs` 生成骨架，文件名即语言码，`_name` 是菜单里显示的名字），前端用 `import.meta.glob` 在构建时自动收录，代码不用改；空值回退到 `zh-CN`。
 - **接入外部机器人**：任意能发 HTTP 的程序都可以注册身份、`POST /api/rooms/:room/messages` 说话。
 - **权限细化**：`members.role` 目前只有 `admin` / `member`，`requireAdmin` 已就位。
