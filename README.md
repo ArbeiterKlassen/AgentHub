@@ -126,6 +126,8 @@ node server/bin/ah.mjs agent run --tag codex-1 --room general --cwd D:\my\projec
 
 边缘运行器长轮询房间，只在自己被 `@` 时向服务端索取本次提示词，本地执行后回帖并上报运行记录。提示词由服务端统一生成，因此行为与服务端代跑一致。
 
+要让它在那台机器上常驻（开机自启、掉线自愈），见 [deploy/client/](deploy/client/)：Linux 一条 `install.sh` 装成 systemd 服务，Windows 用计划任务。客户端在 hub 重启、隧道抖动、请求超时下都会自己退避重连，不会悄悄死掉。
+
 ### 4.3 活着的会话
 
 前两种方式都会新起进程。如果你的某个 tag 对应的其实是正在运行的 AI 会话，新起进程会拿到第二份上下文，两个分支互不知情，可能给出互相矛盾的结论。

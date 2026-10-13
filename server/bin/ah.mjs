@@ -153,6 +153,30 @@ function fmtMessage(m) {
 /* -------------------------------- HTTP -------------------------------- */
 
 async function request(pathname, { method = 'GET', body, headers = {}, raw = false, auth = true } = {}) {
+  const res = await requestSoft(pathname, { method, body, headers, raw, auth });
+  if (!res.ok) {
+    const networkish = res.status == null || res.status === '超时';
+    die(
+      `${res.status ?? '网络错误'} ${res.error}` +
+        (networkish ? connectionHint(res.url, res.error) : '') +
+        (res.status === 401 ? `\n提示：先执行 ah login --tag <tag> --token <token>` : ''),
+    );
+  }
+  return res.data;
+}
+
+/**
+ * 带超时的请求，**不退出进程**：失败时返回 { ok:false, status, error }。
+ *
+ * 为什么要单独一个：`ah inbox --watch` / `ah tail` 是长期值班的，
+ * 服务重启、隧道抖一下都会让请求失败；老实现直接 die() 退出，
+ * 值班进程悄悄死掉，对面看就是「这个 AI 卡住了，怎么 @ 都不回」。
+ * 另外 fetch 默认没有客户端超时，半开连接能把轮询卡住好几分钟。
+ */
+async function requestSoft(
+  pathname,
+  { method = 'GET', body, headers = {}, raw = false, auth = true, timeoutMs } = {},
+) {
   const url = `${CONFIG.server.replace(/\/+$/, '')}${pathname}`;
   const finalHeaders = { ...headers };
   if (auth && CONFIG.token) finalHeaders.Authorization = `Bearer ${CONFIG.token}`;
@@ -161,22 +185,30 @@ async function request(pathname, { method = 'GET', body, headers = {}, raw = fal
     finalHeaders['Content-Type'] = 'application/json';
     payload = JSON.stringify(body);
   }
+  // 长轮询自己会挂着等（timeout=60000 之类），所以调用方可以显式放宽
+  const limitMs = Number(timeoutMs ?? FLAGS.timeout ?? process.env.AH_TIMEOUT_MS ?? 30_000);
   let res;
   try {
-    res = await fetch(url, { method, headers: finalHeaders, body: payload, duplex: raw ? 'half' : undefined });
+    res = await fetch(url, {
+      method,
+      headers: finalHeaders,
+      body: payload,
+      duplex: raw ? 'half' : undefined,
+      signal: AbortSignal.timeout(Math.max(1000, limitMs)),
+    });
   } catch (err) {
     const msg = err?.message ?? String(err);
-    const tlsHint = /certificate|self-signed|unable to verify/i.test(msg)
-      ? '\n提示：服务用的是自签 HTTPS 证书，加 --insecure（或设 AH_INSECURE=1）即可跳过校验'
-      : '';
-    // 服务在 http / https 之间切换过时，最容易撞的就是「协议不对」这一类失败
-    const schemeHint = /fetch failed|ECONNREFUSED|socket hang up|wrong version number/i.test(msg)
-      ? `\n提示：如果服务是用 start-agenthub.bat --https 起的，请改用 https 地址并加 --insecure：` +
-        `\n      --server ${url.replace(/^http:/, 'https:')} --insecure`
-      : '';
-    die(`无法连接 ${url}：${msg}${tlsHint}${schemeHint}\n提示：先用 npm run dev 启动后端，或用 --server 指定地址`);
+    const timedOut = err?.name === 'TimeoutError' || /timed out|timeout/i.test(msg);
+    return {
+      ok: false,
+      status: timedOut ? '超时' : null,
+      url,
+      error: timedOut ? `请求超过 ${limitMs}ms 没有响应（${method} ${pathname}）` : msg,
+      raw: '',
+      data: {},
+    };
   }
-  if (res.status === 204) return {};
+  if (res.status === 204) return { ok: true, status: 204, data: {}, raw: '' };
   const text = await res.text();
   let data;
   try {
@@ -185,10 +217,22 @@ async function request(pathname, { method = 'GET', body, headers = {}, raw = fal
     data = { raw: text };
   }
   if (!res.ok) {
-    const detail = data?.error ?? text.slice(0, 400);
-    die(`${res.status} ${detail}${res.status === 401 ? `\n提示：先执行 ah login --tag <tag> --token <token>` : ''}`);
+    return { ok: false, status: res.status, url, error: data?.error ?? text.slice(0, 400), data, raw: text };
   }
-  return data;
+  return { ok: true, status: res.status, url, data, raw: text };
+}
+
+/** 一次性失败时给点人话提示（只在非 watch 场景用） */
+function connectionHint(url, message) {
+  const tlsHint = /certificate|self-signed|unable to verify/i.test(message)
+    ? '\n提示：服务用的是自签 HTTPS 证书，加 --insecure（或设 AH_INSECURE=1）即可跳过校验'
+    : '';
+  const schemeHint = /fetch failed|ECONNREFUSED|socket hang up|wrong version number|超时/i.test(message)
+    ? `\n提示：如果服务是用 start-agenthub.bat --https 起的，请改用 https 地址并加 --insecure：` +
+      `\n      --server ${url.replace(/^http:/, 'https:')} --insecure` +
+      '\n提示：先用 npm run dev 启动后端，或用 --server 指定地址'
+    : '';
+  return `${tlsHint}${schemeHint}`;
 }
 
 function needAuth() {
@@ -524,16 +568,38 @@ async function cmdTail() {
   const room = await currentRoom();
   let lastId = Number(FLAGS.after ?? 0);
   if (!lastId) {
-    const head = await request(`/api/rooms/${encodeURIComponent(room)}/messages?limit=1`);
-    lastId = head.messages.at(-1)?.id ?? 0;
+    const head = await requestSoft(`/api/rooms/${encodeURIComponent(room)}/messages?limit=1`);
+    if (!head.ok) die(`${head.status ?? '网络错误'} ${head.error}${connectionHint(head.url, head.error)}`);
+    lastId = head.data.messages?.at(-1)?.id ?? 0;
   }
   if (!JSON_OUT) out(dim(`正在跟踪 ${room} 的新消息（Ctrl+C 退出，从 #${lastId} 之后开始）`));
   const interval = Number(FLAGS.interval ?? 0) * 1000;
+  const longPollMs = interval ? 1000 : 25000;
+  let fails = 0;
+  let lastWarnAt = 0;
   for (;;) {
-    const res = await request(
-      `/api/events?room=${encodeURIComponent(room)}&after=${lastId}&timeout=${interval ? 1000 : 25000}`,
+    // 值班命令不能因为服务重启/隧道抖动就退出：失败按退避重试，成功即复位
+    const res = await requestSoft(
+      `/api/events?room=${encodeURIComponent(room)}&after=${lastId}&timeout=${longPollMs}`,
+      { timeoutMs: longPollMs + 15_000 },
     );
-    for (const message of res.messages ?? []) {
+    if (!res.ok) {
+      fails += 1;
+      const backoffMs = Math.min(2000 * fails, 30_000);
+      // 失败提示每 10 条打一次，免得刷屏
+      if (!JSON_OUT && (fails === 1 || Date.now() - lastWarnAt > 60_000)) {
+        lastWarnAt = Date.now();
+        out(dim(`（跟踪中断：${res.status ?? '网络错误'} ${res.error}；${Math.round(backoffMs / 1000)} 秒后重试，已连续失败 ${fails} 次）`));
+      }
+      await new Promise((r) => setTimeout(r, backoffMs));
+      continue;
+    }
+    if (fails) {
+      if (!JSON_OUT) out(dim(`（已恢复跟踪，连续失败 ${fails} 次后重新连上）`));
+      fails = 0;
+    }
+    const messages = res.data.messages ?? [];
+    for (const message of messages) {
       lastId = Math.max(lastId, message.id);
       if (JSON_OUT) out({ ...message, room });
       else out(fmtMessage(message));
@@ -562,7 +628,7 @@ async function cmdInbox() {
   if (FLAGS.room) query.set('room', String(FLAGS.room));
   if (FLAGS.tag) query.set('tag', String(FLAGS.tag));
 
-  const fetchInbox = () => request(`/api/inbox?${query.toString()}`);
+  const fetchInbox = (opts) => requestSoft(`/api/inbox?${query.toString()}`, opts);
   const render = (item) => {
     const age = Math.round(item.ageMs / 60000);
     const who = `@${item.message.senderTag}（${item.message.senderNickname}）`;
@@ -579,29 +645,69 @@ async function cmdInbox() {
 
   if (!FLAGS.watch) {
     const res = await fetchInbox();
-    if (JSON_OUT) return out(res);
-    if (!res.count) {
+    if (!res.ok) die(`${res.status ?? '网络错误'} ${res.error}${connectionHint(res.url, res.error)}`);
+    const inbox = res.data;
+    if (JSON_OUT) return out(inbox);
+    if (!inbox.count) {
       return out(`收件箱是空的（最近 ${minutes} 分钟内没有等你回应的 @）。`);
     }
-    return out(`${bold(`等你回应的 ${res.count} 条`)}（@${res.tag}）\n\n${res.items.map(render).join('\n\n')}`);
+    return out(`${bold(`等你回应的 ${inbox.count} 条`)}（@${inbox.tag}）\n\n${inbox.items.map(render).join('\n\n')}`);
   }
 
-  // 盯梢模式：只打印新出现的条目，适合留一个终端窗口给"活着的会话"值班
+  /**
+   * 盯梢模式：只打印新出现的条目，适合留一个终端窗口给"活着的会话"值班。
+   *
+   * 这个循环**永远不该退出**（除非 Ctrl+C）：服务重启、隧道抖一下、502、超时都只是
+   * 「这次没查到」，退避之后接着来。老实现遇到非 2xx 会 die()，值班进程死了以后
+   * 从群里看就是「这个 AI 卡住了，@ 它也不回」。
+   */
   const seen = new Set();
-  out(dim(`正在盯着 @${CONFIG.tag} 的收件箱（每 ${interval} 秒查一次，Ctrl+C 退出）…`));
+  let fails = 0;
+  let lastOkAt = Date.now();
+  let lastWarnAt = 0;
+  let lastBeatAt = Date.now();
+  out(
+    dim(
+      `正在盯着 @${CONFIG.tag} 的收件箱（每 ${interval} 秒查一次，Ctrl+C 退出；服务重启/网络抖动会自己重连）…`,
+    ),
+  );
   for (;;) {
-    let res;
-    try {
-      res = await fetchInbox();
-    } catch (err) {
-      out(dim(`（查询失败，${interval} 秒后重试：${err?.message ?? err}）`));
-      await new Promise((r) => setTimeout(r, interval * 1000));
+    const res = await fetchInbox({ timeoutMs: 20_000 });
+    if (!res.ok) {
+      fails += 1;
+      const backoffMs = Math.min(2000 * fails, 60_000);
+      if (Date.now() - lastWarnAt > 60_000) {
+        lastWarnAt = Date.now();
+        out(
+          dim(
+            `（${res.status ?? '网络错误'} ${res.error}；${Math.round(backoffMs / 1000)} 秒后重试，已连续失败 ${fails} 次；` +
+              `最后成功 ${Math.round((Date.now() - lastOkAt) / 1000)} 秒前）`,
+          ),
+        );
+      }
+      await new Promise((r) => setTimeout(r, backoffMs));
       continue;
     }
-    for (const item of res.items) {
+    if (fails) {
+      out(dim(`（已重新连上，连续失败 ${fails} 次）`));
+      fails = 0;
+    }
+    lastOkAt = Date.now();
+    for (const item of res.data.items ?? []) {
       if (seen.has(item.message.id)) continue;
       seen.add(item.message.id);
       out(`\n${yellow('新 @')} ${fmtTime(item.message.createdAt)}\n${render(item)}`);
+    }
+    // 记过的 id 不用留太多，避免跑几天后内存一直涨
+    if (seen.size > 500) {
+      const keep = [...seen].slice(-200);
+      seen.clear();
+      for (const id of keep) seen.add(id);
+    }
+    // 心跳：让人一眼看出这个窗口还活着（而不是"它自己悄悄死了"）
+    if (Date.now() - lastBeatAt > 10 * 60_000) {
+      lastBeatAt = Date.now();
+      out(dim(`（值班中：${new Date().toLocaleTimeString()}，累计收到 ${seen.size} 条 @）`));
     }
     await new Promise((r) => setTimeout(r, interval * 1000));
   }
@@ -924,23 +1030,52 @@ async function cmdAgentRun() {
   }
   let lastId = Number(FLAGS.after ?? 0);
   if (!lastId) {
-    const head = await request(`/api/rooms/${encodeURIComponent(room)}/messages?limit=1`);
-    lastId = head.messages.at(-1)?.id ?? 0;
+    const head = await requestSoft(`/api/rooms/${encodeURIComponent(room)}/messages?limit=1`);
+    if (!head.ok) die(`${head.status ?? '网络错误'} ${head.error}${connectionHint(head.url, head.error)}`);
+    lastId = head.data.messages?.at(-1)?.id ?? 0;
   }
+  /**
+   * 值班循环同样不能一断就死：hub 重启、隧道抖动、长轮询超时都只是「这次没拿到」，
+   * 退避之后接着来。回帖失败会把回复内容打进日志，不静默丢。
+   */
+  let fails = 0;
+  let lastWarnAt = 0;
   for (;;) {
-    const res = await request(
-      `/api/events?room=${encodeURIComponent(room)}&after=${lastId}&timeout=${FLAGS.once ? 0 : 25000}`,
+    const pollMs = FLAGS.once ? 0 : 25000;
+    const res = await requestSoft(
+      `/api/events?room=${encodeURIComponent(room)}&after=${lastId}&timeout=${pollMs}`,
+      { timeoutMs: pollMs + 15_000 },
     );
-    for (const message of res.messages ?? []) {
+    if (!res.ok) {
+      fails += 1;
+      const backoffMs = Math.min(2000 * fails, 60_000);
+      if (!JSON_OUT && (fails === 1 || Date.now() - lastWarnAt > 60_000)) {
+        lastWarnAt = Date.now();
+        out(dim(`（${res.status ?? '网络错误'} ${res.error}；${Math.round(backoffMs / 1000)} 秒后重试，已连续失败 ${fails} 次）`));
+      }
+      await new Promise((r) => setTimeout(r, backoffMs));
+      continue;
+    }
+    if (fails) {
+      if (!JSON_OUT) out(dim(`（已重新连上，连续失败 ${fails} 次）`));
+      fails = 0;
+    }
+    for (const message of res.data.messages ?? []) {
       lastId = Math.max(lastId, message.id);
       if (message.senderKind === 'system') continue;
       if (message.senderTag === tag) continue;
       const mentioned = (message.mentions ?? []).includes(tag);
       if (!mentioned && !FLAGS.all) continue;
       if (!JSON_OUT) out(dim(`→ 被唤醒：${fmtMessage(message)}`));
-      const prepared = await request(
+      const preparedRes = await requestSoft(
         `/api/rooms/${encodeURIComponent(room)}/agents/${tag}/prompt?trigger=${message.id}`,
       );
+      if (!preparedRes.ok) {
+        // 拿不到提示词（例如消息刚被删、房间刚被解散）就跳过这一条，别把值班循环带走
+        process.stderr.write(red(`✗ 取提示词失败（#${message.id}）：${preparedRes.status ?? '网络错误'} ${preparedRes.error}\n`));
+        continue;
+      }
+      const prepared = preparedRes.data;
       if (FLAGS['dry-run']) {
         out(`\n${bold('=== 将发送给 CLI 的提示词 ===')}\n${prepared.prompt}\n`);
         continue;
@@ -963,16 +1098,38 @@ async function cmdAgentRun() {
         }).catch(() => {});
         continue;
       }
-      const reply = await request(`/api/rooms/${encodeURIComponent(room)}/messages`, {
-        method: 'POST',
-        body: {
-          text: run.text.trim(),
-          replyTo: message.id,
-          chainId: prepared.chainId,
-          hop: prepared.hop,
-          meta: { edge: true, adapter: prepared.adapter.id, durationMs: run.durationMs },
-        },
-      });
+      /**
+       * 回帖要重试：CLI 已经烧了算力，不能因为一次 502 / 超时就把回答丢掉。
+       * 重试全失败时把正文打到 stderr，至少人还能捡回来。
+       */
+      const replyBody = {
+        text: run.text.trim(),
+        replyTo: message.id,
+        chainId: prepared.chainId,
+        hop: prepared.hop,
+        meta: { edge: true, adapter: prepared.adapter.id, durationMs: run.durationMs },
+      };
+      let reply = null;
+      let replyErr = null;
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        const posted = await requestSoft(`/api/rooms/${encodeURIComponent(room)}/messages`, {
+          method: 'POST',
+          body: replyBody,
+        });
+        if (posted.ok) {
+          reply = posted.data;
+          break;
+        }
+        replyErr = `${posted.status ?? '网络错误'} ${posted.error}`;
+        if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 2000));
+      }
+      if (!reply) {
+        process.stderr.write(
+          red(`✗ 回帖失败（重试 3 次）：${replyErr}\n—— 以下是没能发出去的回复，请手工处理 ——\n${replyBody.text}\n`),
+        );
+        lastId = Math.max(lastId, message.id);
+        continue;
+      }
       await request(`/api/agents/${tag}/runs`, {
         method: 'POST',
         body: {
