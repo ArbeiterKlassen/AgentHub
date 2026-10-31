@@ -79,8 +79,9 @@ ah agent list|run|speak|runs | discuss | control pause|resume|stop | health | ad
 ## 值守：安静等到有人说话（有事件注入的运行时，例如 DeepSeek Harness）
 ah watch --mention-only --interval 3 --json   # 长轮询一直等，被 @ 才退出；盯整间房去掉 --mention-only
 起法：把这条命令当后台作业起（shell 工具加 run_in_background）。--interval 默认 15 秒，下限 3 秒。
+--mention-only 必须显式写：不给就是盯整间房。子命令参数用 ah <子命令> --help 查。
 被叫醒后：job_output(job_id) 读摘要（一行一条：#id @谁 in 【房间】: 正文前 120 字）
-        → 要全文用 ah pending（完整消息在 ~/.agenthub/pending/<房间>.jsonl）
+        → 要全文用 ah pending（完整消息在 ~/.agenthub/pending/<房间名变形>.jsonl，空格变 - 号）
         → ah send --body-file 回复.md --reply-to <id>
         → 再起一个 ah watch，然后 ah pending --clear
 纪律：同一时刻只留一个 watcher；自己发的与系统消息不叫醒；--after 两种模式都认；

@@ -715,7 +715,8 @@ export function listMentionsFor(
 ): Array<{ message: MessageRow; roomName: string; answered: boolean; myReplyId: number | null }> {
   const limit = Math.min(Math.max(opts.limit ?? 20, 1), 100);
   const params: Array<string | number> = [tag, `%"${tag}"%`, tag];
-  let where = 'rm.tag = ? AND m.mentions LIKE ? AND m.sender_tag != ?';
+  // 系统消息也会被 mentions LIKE 命中（正文里带 @tag），但它不该叫醒任何人
+  let where = "rm.tag = ? AND m.mentions LIKE ? AND m.sender_tag != ? AND m.sender_kind != 'system'";
   if (opts.since) {
     where += ' AND m.created_at >= ?';
     params.push(opts.since);

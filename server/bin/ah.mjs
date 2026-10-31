@@ -18,7 +18,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawn } from 'node:child_process';
 import { Readable } from 'node:stream';
-import { isOlderThanStart } from './lib/watch-cursor.mjs';
+import { flattenInboxItem, isOlderThanStart } from './lib/watch-cursor.mjs';
 
 const DEFAULT_SERVER = process.env.AH_SERVER ?? 'http://127.0.0.1:8787';
 
@@ -669,16 +669,32 @@ function parseSince(value) {
 async function cmdHistory() {
   needAuth();
   const room = await currentRoom();
-  const params = new URLSearchParams({ limit: String(FLAGS.limit ?? 20) });
+  const since = parseSince(FLAGS.since);
+  // 服务端按 limit 截断，--since 只能在这一页里筛。给了 --since 就把 limit 放大，
+  // 并且在一页取满时显式标 truncated：否则「窗口外的消息」会被静默当成「没有」。
+  const limit = Number(FLAGS.limit ?? (since ? 200 : 20));
+  const params = new URLSearchParams({ limit: String(limit) });
   if (FLAGS.search) params.set('search', String(FLAGS.search));
   if (FLAGS.sender) params.set('sender', String(FLAGS.sender).replace(/^@/, ''));
   if (FLAGS.before) params.set('before', String(FLAGS.before));
   const res = await request(`/api/rooms/${encodeURIComponent(room)}/messages?${params}`);
-  if (JSON_OUT) return out(res);
-  const since = parseSince(FLAGS.since);
   const messages = since ? res.messages.filter((m) => m.createdAt >= since) : res.messages;
-  if (!messages.length) return out(dim('（没有符合条件的消息）'));
-  out(`${bold(room)} 最近 ${messages.length} 条消息\n`);
+  const truncated = Boolean(since) && res.messages.length >= limit;
+  if (JSON_OUT) return out({ ...res, messages, truncated });
+  if (!messages.length) {
+    return out(
+      dim(
+        truncated
+          ? `（这一页 ${limit} 条里没有符合 --since 的消息；更早的可能没取到，调大 --limit 再看）`
+          : '（没有符合条件的消息）',
+      ),
+    );
+  }
+  out(
+    `${bold(room)} 最近 ${messages.length} 条消息` +
+      (truncated ? `（已按 --limit ${limit} 截断，更早的可能没取到）` : '') +
+      '\n',
+  );
   out(messages.map(fmtMessage).join('\n\n'));
 }
 
@@ -823,9 +839,16 @@ async function cmdWatch() {
     if (!first.ok) {
       die(`${first.status ?? '网络错误'} ${first.error}${connectionHint(first.url, first.error)}`);
     }
-    // 只把「确实早于本次启动」的条目记为已见过；窗口期到达的新消息留给主循环叫醒
+    // 只把「确实早于本次启动」的条目记为已见过；窗口期到达的新消息留给主循环叫醒。
+    // maxIdAtStart 是与时钟无关的水位线：本机时钟快时也不会把新消息当成旧的。
+    const maxIdAtStart = (first.data.items ?? []).reduce(
+      (acc, item) => Math.max(acc, item.message.id),
+      0,
+    );
     for (const item of first.data.items ?? []) {
-      if (isOlderThanStart(item.message, { afterId, startedAtMs })) seen.add(item.message.id);
+      if (isOlderThanStart(item.message, { afterId, startedAtMs, maxIdAtStart })) {
+        seen.add(item.message.id);
+      }
     }
 
     let fails = 0;
@@ -839,20 +862,19 @@ async function cmdWatch() {
       }
       fails = 0;
       const fresh = (res.data.items ?? []).filter(
-        (item) => !item.answered && !seen.has(item.message.id),
+        (item) =>
+          !item.answered &&
+          !seen.has(item.message.id) &&
+          // 服务端已排除系统消息，这里再兜一层，两边都改了才叫得醒
+          item.message.senderKind !== 'system' &&
+          item.message.senderTag !== CONFIG.tag,
       );
       if (!fresh.length) continue;
       for (const item of fresh) seen.add(item.message.id);
+      // 拍平逻辑只保留一份（watch-cursor.mjs），不在这里手写第二套
       return emitWatchResult(
         fresh[0].room.name,
-        fresh.map((item) => ({
-          room: item.room.name,
-          id: item.message.id,
-          senderTag: item.message.senderTag,
-          senderNickname: item.message.senderNickname,
-          createdAt: item.message.createdAt,
-          text: item.message.text,
-        })),
+        fresh.map((item) => flattenInboxItem(item)),
         { mention: true },
       );
     }
@@ -897,7 +919,6 @@ async function cmdWatch() {
         senderNickname: m.senderNickname,
         createdAt: m.createdAt,
         text: m.text,
-        message: m,
       })),
     );
   }
@@ -919,7 +940,8 @@ async function cmdPending() {
   } catch {
     files = [];
   }
-  if (filter) files = files.filter((f) => f.startsWith(filter));
+  // 精确匹配：startsWith 会让 --room DSH 连 DSH-Debug.jsonl 一起清掉
+  if (filter) files = files.filter((f) => f === `${filter}.jsonl`);
   if (FLAGS.clear === true) {
     // 用 unlinkSync：rmSync(...,{force:true}) 在 Windows 上遇到非 ASCII 文件名时
     // 会静默「成功」但文件还在（git-bash 里实测），删不掉也看不出来。
@@ -1742,6 +1764,37 @@ async function cmdDoctor() {
 
 /* -------------------------------- 分发 -------------------------------- */
 
+/**
+ * 子命令的用法。`ah <子命令> --help` 打这一行，不再吐整篇全局帮助。
+ * 这里只列参数；语义与约束在 skills/agenthub/SKILL.md 与 docs/agent-api.md 里。
+ */
+const USAGE = {
+  register: 'ah register --tag <tag> --nickname <昵称> --kind agent|human --adapter <适配器> [--server <url>] [--room <房间>]',
+  login: 'ah login --tag <tag> --token <token> [--server <url>] [--profile <名字>] [--force]',
+  whoami: 'ah whoami [--show-token] [--json]',
+  rooms: 'ah rooms [--json]',
+  room: 'ah room create|join|members|leave|code [...参数]',
+  send: 'ah send [--body-file <文件>|-] [--stdin] ["短消息"] [--text <文本>] [--room <房间>] [--reply-to <id>] [--to <tag>] [--file <附件>] [--data <json>] [--chain <id>] [--hop <n>] [--as-agent <tag>]',
+  history: 'ah history [--room <房间>] [--limit <n>] [--since 30m] [--search <关键字>] [--sender <tag>] [--before <id>] [--json]',
+  tail: 'ah tail [--room <房间>] [--after <id>] [--interval <秒>] [--json]',
+  watch: 'ah watch [--room <房间>] [--after <id>] [--mention-only] [--interval <秒>=15，下限 3] [--timeout <秒>=25] [--minutes <n>=720] [--json]',
+  pending: 'ah pending [--room <房间>] [--clear] [--json]',
+  inbox: 'ah inbox [--room <房间>] [--limit <n>] [--minutes <n>] [--all] [--watch] [--interval <秒>=10] [--json]',
+  unread: 'ah unread [--room <房间>] [--json]',
+  read: 'ah read [--room <房间>] [--to <id>|--all]',
+  rulings: 'ah rulings [--room <房间>] [--scope <名>] [--all] [--json]',
+  heartbeat: 'ah heartbeat [--note "在忙什么"] [--room <房间>]',
+  files: 'ah files list|upload|pull|rm [...参数]',
+  agent: 'ah agent list|add|update|remove [...参数]',
+  discuss: 'ah discuss --topic <主题> --agents <tag,tag> [--rounds <n>] [--room <房间>]',
+  control: 'ah control pause|resume|stop [--room <房间>] [--agent <tag>]',
+  health: 'ah health [--probe] [--json]',
+  adapters: 'ah adapters [--fresh] [--json]',
+  status: 'ah status [--json]',
+  doctor: 'ah doctor [--json]',
+  usage: 'ah usage [--json]',
+};
+
 const table = {
   help: async () => out(HELP),
   register: cmdRegister,
@@ -1778,7 +1831,8 @@ if (!handler) {
 }
 // `ah login --help` 应该看到用法并正常退出，而不是被当成「缺少 --tag」报错
 if (FLAGS.help === true || FLAGS.h === true) {
-  out(HELP);
+  const target = COMMAND === 'help' ? ARGS[0] : COMMAND;
+  out((target && USAGE[target]) || HELP);
   process.exitCode = 0;
 } else {
   try {

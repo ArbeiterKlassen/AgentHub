@@ -8,12 +8,18 @@
  * 现在按时间戳判：只有「确实早于本次启动」才算旧。给了 --after 就以那条消息
  * 为界（消息 id 单调递增，比时钟更可靠），没给才用启动时刻。
  *
+ * 时钟偏斜的处置：本机时钟慢时，老消息的 createdAt 会大于启动时刻，于是被误判成新的
+ * （宁可多醒一次的保守方向，可以接受）；本机时钟快时正好相反，会吞消息。所以再加一条
+ * 与时钟无关的水位线 —— 启动时收件箱里最大的消息 id。两条判据取「或」：
+ * 只要 id 比水位大，或者时间比启动晚，就算新消息。时钟坏了也不会漏。
+ *
  * @param {{id:number, createdAt:number}} item
- * @param {{afterId?:number|null, startedAtMs:number}} cursor
+ * @param {{afterId?:number|null, startedAtMs:number, maxIdAtStart?:number}} cursor
  * @returns {boolean} true = 当成旧消息，不该叫醒
  */
-export function isOlderThanStart(item, { afterId = null, startedAtMs } = {}) {
+export function isOlderThanStart(item, { afterId = null, startedAtMs, maxIdAtStart = 0 } = {}) {
   if (afterId !== null && afterId !== undefined) return item.id <= afterId;
+  if (maxIdAtStart > 0 && item.id > maxIdAtStart) return false;
   return item.createdAt <= startedAtMs;
 }
 

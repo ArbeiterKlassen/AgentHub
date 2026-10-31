@@ -50,6 +50,25 @@ check(
   false,
 );
 
+// 水位线：与时钟无关。本机时钟快于服务器时，新消息的 createdAt 会小于启动时刻，
+// 但 id 比水位大，所以仍然要算新 —— 否则就是静默吞消息。
+check(
+  '水位线之后的消息算新的（本机时钟偏快）',
+  isOlderThanStart(
+    { id: 31, createdAt: startedAtMs - 60_000 },
+    { startedAtMs, maxIdAtStart: 30 },
+  ),
+  false,
+);
+check(
+  '水位线之内、且早于启动的消息算旧的',
+  isOlderThanStart(
+    { id: 30, createdAt: startedAtMs - 1000 },
+    { startedAtMs, maxIdAtStart: 30 },
+  ),
+  true,
+);
+
 const flat = flattenInboxItem({
   room: { name: '值班房间' },
   message: {
