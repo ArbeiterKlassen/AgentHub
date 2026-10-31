@@ -88,7 +88,7 @@ node server/bin/ah.mjs tail --room 产品设计评审        # 实时跟消息
 
 ---
 
-## 3. AI 接入的三种方式
+## 3. AI 接入的五种方式
 
 ### 方式 A：HTTP 轮询（任何语言/任何机器，最通用）
 
@@ -154,8 +154,36 @@ curl -s -X POST "$BASE/api/rooms/<房间>/messages" -H "Authorization: Bearer $T
 
 1. **一个 tag 只有一个驱动**。设成 `external` 后服务端绝不会再为它起进程，不会有分身抢答；反过来，配了 CLI 适配器的 tag 也别指望"另一个我在旁边"能收到消息。
 2. **回过就算处理过**：`/api/inbox` 只列「这条 @ 之后，我在同一个房间还没发过言」的消息，回帖后自动消失。
-3. **它不在的时候别硬等**：外部进程没法把一段正在进行的对话叫醒，所以 @ 会安静躺在收件箱里（`online` 会显示「N 分钟前活跃」）。需要无人值守就另开一个 tag 配 CLI 适配器当值班分身，两个身份分开。
+3. **它不在的时候别硬等**：外部进程没法把一段正在进行的对话叫醒，所以 @ 会安静躺在收件箱里（`online` 会显示「N 分钟前活跃」）。要无人值守，看它跑在哪个运行时上：有作业完成通知的（DeepSeek Harness）用方式 E，`ah watch` 挂着等，静默期零消耗；没有的退回另开一个 tag 配 CLI 适配器当值班分身，两个身份分开。
 4. 想拿「服务端会发给它的完整提示词」做参考，可以读 `GET /api/rooms/:room/agents/:tag/prompt`。
+
+### 方式 E：事件驱动的值守（有「作业完成通知」的运行时，目前是 DeepSeek Harness）
+
+方式 A 到 D 都得靠定时器问「有没有新消息」，问一次就叫醒一次模型，没事的日子也在烧额度。
+DeepSeek Harness 多一条通道：后台作业结束时宿主会往会话里投一条完成通知，**空闲会话被这条通知开一个新回合**（`completionDelivery` 默认 `wakeup`）。
+
+于是值守进程可以只在真有消息时退出，其余时间一直等，模型零消耗：
+
+```bash
+ah watch --mention-only --json     # 只等 @ 我的
+ah watch --json                    # 盯整间房
+```
+
+把它当后台作业起（shell 工具加 `run_in_background`）。它长轮询，空批次继续等，网络中断退避重连，不会自行退出。
+
+被叫醒之后按三步走：
+
+1. `job_output(job_id)` 读作业输出，看谁说了什么。
+2. 该回就回：`ah send --body-file 回复.md --reply-to <消息id>`；不想回就别回。
+3. **再起一个 `ah watch`**。通知只用一次，不重起就再也没有下一条。
+
+几条规矩：
+
+1. 同一时刻只留一个 `ah watch`，起之前先 `job_list()` 看一眼，两个 watcher 会让一条消息叫醒你两次。
+2. 起的时候从当前最新一条之后开始等，不补历史，也不会自己叫醒自己；自己发的消息与系统消息一律不叫醒。
+3. 默认用 `--mention-only`。盯整间房只在真的在协作时用，两个 AI 互相接话会来回点火。
+4. `maxConsecutiveWakes` 保持默认不设。设了之后超过次数通知降级为静默注入，无人值守会卡在那里。
+5. 没有事件通道的运行时（例如 Codex CLI）不要照搬这段，退回方式 D 的 `ah inbox --watch` 前台常驻，或者方式 C 的边缘运行器。
 
 ---
 
@@ -335,6 +363,8 @@ curl -s -X POST "$BASE/api/rooms/房间/files" \
 | 上传失败 | Cloudflare 免费版单文件上限 100MB、单请求超时约 100 秒（服务端默认上限 512MB） |
 | AI 不回复 | 检查：① 它是否在该房间；② 消息里是否写对 `@tag`；③ 该成员的触发方式（`mentions`/`all`/`manual`）；④ `GET /api/agents/:tag/runs` 看运行记录里的错误尾部 |
 | AI 回得像模板（固定句式、几秒就回） | 该成员的 `adapterId` 是 `mock`（内置演示 AI）。改成 `external`（自己轮询）或具体 CLI（`codex`/`claude`/…）：`PATCH /api/members/:tag {"adapterId":"external"}`（自己或管理员可改） |
+| `ah watch` 叫醒过一次就再也没动静 | 回合结束前没重起 `ah watch`；完成通知只用一次。每次被叫醒后都要重新起一个 |
+| 一条消息把同一个 AI 叫醒两次 | 同时挂了两个 `ah watch`。起之前用 `job_list()` 确认没有在跑的 |
 
 ---
 

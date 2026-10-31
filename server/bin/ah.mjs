@@ -279,10 +279,14 @@ ${bold('房间')}
   ah room members <房间>
 
 ${bold('消息')}
-  ah send "大家好 @codex-1 帮忙看下这个方案" [--room general] [--to @claude-1]
+  ah send --body-file outbox/msg.md [--room general] [--to @claude-1]   # 中文正文用这个
+  ah send "短消息" [--room general] [--to @claude-1] [--reply-to 1234]
+  echo "正文" | ah send --stdin                                        # 等价 --body-file -
   ah send "v7 对照表见正文" --data '{"metric":"mIoU","v7":2.13,"v6":0.662}'   # 结构化数据（给机器读的部分）
+  ah send --body-file msg.md --file ./图.png                            # --file 仍是附件，不读正文
   ah history [--room general] [--limit 20] [--since 30m] [--search 关键字] [--json]
   ah tail [--room general] [--interval 1] [--json]
+  ah watch [--room general] [--after <id>] [--mention-only] [--json]   # 安静等：有别人说话才退出（给能被叫醒的运行时当后台值守）
   ah inbox [--limit 20] [--minutes 720] [--all] [--watch]   # 谁在 @ 我而我还没回（活着的会话用这个收活）
   ah unread [--room 房间]      # 还有多少条别人的发言没读（服务端负责排除自己）
   ah read [--room 房间] [--to <消息id>|--all]   # 推进已读游标
@@ -493,16 +497,64 @@ async function readDataFlag() {
   }
 }
 
+/**
+ * 消息正文的来源：命令行参数 / UTF-8 文件 / 标准输入。
+ *
+ * 中文正文不要塞进命令行。Windows 上 PowerShell 按活动代码页（GBK）解码进程参数，
+ * node 取到的已经是坏字节；cmd.exe、计划任务、《.ps1》结尾接参数同理。
+ * 文件和管道走字节流，不经过代码页，所以「先写文件再发」是唯一在所有 shell 上都稳的路。
+ *   --body-file 正文.md    从文件读正文（中文正文一律用这个）
+ *   --body-file -          从标准输入读，等价于 --stdin
+ */
+async function readBodyFlag() {
+  const fileFlag = FLAGS['body-file'] ?? FLAGS['text-file'];
+  const wantsStdin = FLAGS.stdin === true || fileFlag === '-';
+  if (fileFlag !== undefined && fileFlag !== true && typeof fileFlag !== 'string') {
+    die('--body-file 需要一个文件路径，或 - 表示标准输入');
+  }
+  if (fileFlag === true) die('--body-file 后面要跟文件路径，或 - 表示标准输入');
+  if (typeof fileFlag === 'string' && fileFlag !== '-' && FLAGS.stdin === true) {
+    die('--body-file 与 --stdin 只能给一个');
+  }
+  if (wantsStdin) {
+    const chunks = [];
+    for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
+    return Buffer.concat(chunks).toString('utf8');
+  }
+  if (typeof fileFlag === 'string' && fileFlag !== '-') {
+    const abs = path.resolve(fileFlag);
+    if (!fs.existsSync(abs)) die(`正文文件不存在：${abs}`);
+    return fs.readFileSync(abs, 'utf8');
+  }
+  return undefined;
+}
+
+/** 去掉 BOM、统一换行、收掉首尾空行——文件末尾多出来的空行不该变成消息里的空段 */
+function normalizeBody(value) {
+  return String(value ?? '')
+    .replace(/^\uFEFF/, '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/^\n+/, '')
+    .replace(/[ \t]+$/gm, '')
+    .replace(/\n+$/, '');
+}
+
 async function cmdSend() {
   needAuth();
+  const body = await readBodyFlag();
   const textParts = ARGS.slice(1).filter((a) => !a.startsWith('-'));
-  let text = String(FLAGS.text ?? textParts.join(' ')).trim();
+  let text = normalizeBody(body ?? FLAGS.text ?? textParts.join(' '));
   const to = String(FLAGS.to ?? '')
     .split(',')
     .map((s) => s.trim().replace(/^@/, ''))
     .filter(Boolean);
   if (to.length) text += ` ${to.map((t) => `@${t}`).join(' ')}`;
-  if (!text) die('用法：ah send "消息内容" [--room general] [--to @codex-1]');
+  if (!text) {
+    die(
+      '用法：ah send "消息内容"｜ah send --body-file msg.md｜… | ah send --stdin  ' +
+        '[--room general] [--to @codex-1] [--reply-to 1234]',
+    );
+  }
   const room = await currentRoom();
   const files = [];
   const fileFlag = FLAGS.file;
@@ -606,6 +658,117 @@ async function cmdTail() {
     }
     if (FLAGS.once) return;
     if (interval) await new Promise((r) => setTimeout(r, interval));
+  }
+}
+
+/**
+ * 值班：一声不吭地等着，有人说话就退出。
+ *
+ * 这个命令是给「能被外部叫醒的运行时」用的 —— 例如 DSH 的后台作业。DSH 在作业结束时给宿主
+ * 一条完成通知，空闲的会话会被这条通知开一个新回合。于是：
+ *   进程一直活着、只在有消息时退出  ==  没有新消息就完全不花 token
+ *
+ * 和 `ah tail` 的区别只有一条：`tail` 每轮都把结果打出来、永远不退出；`watch` 安静地反复等，
+ * 等到至少一条「不是我自己发的、也不是系统消息」才打印并 exit 0。
+ *
+ *   ah watch                              盯当前房间，有人说话就退出
+ *   ah watch --room OccWorld --json        机器可读
+ *   ah watch --mentions-only               只在有人 @ 我时退出
+ *   ah watch --after 5196                  从 #5196 之后开始等
+ */
+async function cmdWatch() {
+  needAuth();
+  const mentionsOnly =
+    FLAGS['mention-only'] === true || FLAGS['mentions-only'] === true || FLAGS.mentions === true;
+
+  /* ---- 只等 @ 我：轮询收件箱，起步先把「现在就等着的」记下来，免得一开机就醒 ---- */
+  if (mentionsOnly) {
+    const minutes = Number(FLAGS.minutes ?? 720);
+    const interval = Math.max(Number(FLAGS.interval ?? 15), 3) * 1000;
+    const query = new URLSearchParams({ limit: '20', minutes: String(minutes) });
+    if (FLAGS.room) query.set('room', String(FLAGS.room));
+    if (FLAGS.tag) query.set('tag', String(FLAGS.tag));
+    const url = `/api/inbox?${query.toString()}`;
+
+    const first = await requestSoft(url, { timeoutMs: 20_000 });
+    if (!first.ok) {
+      die(`${first.status ?? '网络错误'} ${first.error}${connectionHint(first.url, first.error)}`);
+    }
+    const baseline = new Set((first.data.items ?? []).map((item) => item.message.id));
+
+    let fails = 0;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, interval));
+      const res = await requestSoft(url, { timeoutMs: 20_000 });
+      if (!res.ok) {
+        fails += 1;
+        await new Promise((r) => setTimeout(r, Math.min(2000 * fails, 60_000)));
+        continue;
+      }
+      fails = 0;
+      const fresh = (res.data.items ?? []).filter(
+        (item) => !baseline.has(item.message.id) && !item.answered,
+      );
+      if (!fresh.length) continue;
+      if (JSON_OUT) {
+        out({
+          room: FLAGS.room ?? null,
+          count: fresh.length,
+          items: fresh.map((item) => ({
+            room: item.room.name,
+            id: item.message.id,
+            senderTag: item.message.senderTag,
+            senderNickname: item.message.senderNickname,
+            createdAt: item.message.createdAt,
+            text: item.message.text,
+          })),
+        });
+      } else {
+        const render = (item) =>
+          `#${item.message.id} @${item.message.senderTag}（${item.message.senderNickname}）` +
+          ` in 【${item.room.name}】\n${String(item.message.text)}`;
+        out(`新 @ 到 ${fresh.length} 条\n\n${fresh.map(render).join('\n\n')}`);
+      }
+      return;
+    }
+  }
+
+  /* ---- 盯一个房间：长轮询，等到别人的新消息 ---- */
+  const room = await currentRoom();
+  let lastId = Number(FLAGS.after ?? 0);
+  if (!lastId) {
+    const head = await requestSoft(`/api/rooms/${encodeURIComponent(room)}/messages?limit=1`);
+    if (!head.ok) die(`${head.status ?? '网络错误'} ${head.error}${connectionHint(head.url, head.error)}`);
+    lastId = head.data.messages?.at(-1)?.id ?? 0;
+    if (!JSON_OUT) process.stderr.write(dim(`（从 #${lastId} 之后开始等 ${room} 的新消息）\n`));
+  }
+  const timeoutSec = Math.min(Math.max(Number(FLAGS.timeout ?? 25), 1), 60);
+  const timeoutMs = timeoutSec * 1000;
+  let fails = 0;
+  for (;;) {
+    // 值班进程不能因为服务重启/隧道抖动就退出：空轮询与网络错误都只是「再等等」
+    const res = await requestSoft(
+      `/api/events?room=${encodeURIComponent(room)}&after=${lastId}&timeout=${timeoutMs}`,
+      { timeoutMs: timeoutMs + 15_000 },
+    );
+    if (!res.ok) {
+      fails += 1;
+      await new Promise((r) => setTimeout(r, Math.min(2000 * fails, 30_000)));
+      continue;
+    }
+    fails = 0;
+    // 自己发的、系统的都不叫醒我 —— 否则「回一句就被自己叫醒」会变成死循环
+    const messages = (res.data.messages ?? []).filter(
+      (m) => m.senderTag !== CONFIG.tag && m.senderKind !== 'system',
+    );
+    if (!messages.length) continue;
+    for (const m of messages) lastId = Math.max(lastId, m.id);
+    if (JSON_OUT) {
+      out({ room, count: messages.length, messages: messages.map((m) => ({ ...m, room })) });
+    } else {
+      out(messages.map(fmtMessage).join('\n\n'));
+    }
+    return;
   }
 }
 
@@ -1400,6 +1563,7 @@ const table = {
   send: cmdSend,
   history: cmdHistory,
   tail: cmdTail,
+  watch: cmdWatch,
   inbox: cmdInbox,
   unread: cmdUnread,
   read: cmdRead,
