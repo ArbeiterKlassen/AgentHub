@@ -2,5 +2,14 @@
 # AgentHub CLI launcher (Linux / macOS / git-bash). Works from any directory.
 # chmod +x this file and put its folder on PATH so `ah ...` works.
 # Chinese message bodies: use --body-file, not a command-line argument.
-here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# 解析符号链接：把本文件 ln -s 到 /usr/local/bin/ah 后仍然指向真实仓库位置。
+self=$0
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case $link in
+    /*) self=$link ;;
+    *) self=$(dirname -- "$self")/$link ;;
+  esac
+done
+here=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd)
 exec node "$here/../server/bin/ah.mjs" "$@"
