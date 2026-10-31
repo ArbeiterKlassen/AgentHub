@@ -18,6 +18,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawn } from 'node:child_process';
 import { Readable } from 'node:stream';
+import { isOlderThanStart } from './lib/watch-cursor.mjs';
 
 const DEFAULT_SERVER = process.env.AH_SERVER ?? 'http://127.0.0.1:8787';
 
@@ -81,6 +82,31 @@ function saveProfile(patch) {
   return next;
 }
 
+/** 磁盘上的原始 profile（不含命令行覆盖），用来判断「这个名字现在是谁在用」。 */
+function readStoredProfile() {
+  try {
+    return JSON.parse(fs.readFileSync(profilePath, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * 新建 profile 时必须显式给服务地址。
+ *
+ * 否则会静默回落到 http://127.0.0.1:8787，报一句「先用 npm run dev 启动后端」——
+ * 这句是给本地开发者看的，云端用户看了只会更糊涂。
+ */
+function requireServerForNewProfile(tag, action) {
+  if (FLAGS.server || process.env.AH_SERVER) return;
+  if (fs.existsSync(profilePath)) return;
+  die(
+    `profile「${profileName}」是新建的，还没有服务地址，默认会打到 http://127.0.0.1:8787。\n` +
+      `请显式指定，例如：\n` +
+      `  ah ${action} --profile ${profileName} --server https://agenthub.soyorin.work --tag ${tag} --token <token>`,
+  );
+}
+
 const CONFIG = loadProfile();
 
 // 自签证书：只有在显式允许时才跳过校验（本地/内网自建服务用）
@@ -119,13 +145,35 @@ function out(value) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
-function die(message, code = 1) {
-  process.stderr.write(`${red('错误')} ${message}\n`);
-  process.exit(code);
+class DieError extends Error {
+  constructor(message, code) {
+    super(message);
+    this.name = 'DieError';
+    this.code = code ?? 1;
+  }
 }
 
-function fmtTime(ts) {
-  const d = new Date(ts);
+/**
+ * 出错即收尾。
+ *
+ * 直接用 process.exit() 时，Windows 上偶尔会在 stdout/socket 句柄关闭的瞬间撞上
+ * `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)`（libuv 退出期断言）。
+ * 现在改成抛一个专门的错误，由最外层挂上退出码，再让事件循环空转两拍收尾。
+ */
+function die(message, code = 1) {
+  process.stderr.write(`${red('错误')} ${message}\n`);
+  process.exitCode = code ?? 1;
+  throw new DieError(message, code);
+}
+
+/** token 打码：终端 scrollback、截图、录屏都可能把它带出去。 */
+function maskToken(token) {
+  const t = String(token ?? '');
+  if (t.length <= 8) return '****';
+  return `${t.slice(0, 4)}…${t.slice(-4)}`;
+}
+
+function fmtTime(ts) {  const d = new Date(ts);
   const pad = (n) => String(n).padStart(2, '0');
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
@@ -286,7 +334,8 @@ ${bold('消息')}
   ah send --body-file msg.md --file ./图.png                            # --file 仍是附件，不读正文
   ah history [--room general] [--limit 20] [--since 30m] [--search 关键字] [--json]
   ah tail [--room general] [--interval 1] [--json]
-  ah watch [--room general] [--after <id>] [--mention-only] [--json]   # 安静等：有别人说话才退出（给能被叫醒的运行时当后台值守）
+  ah watch [--room general] [--after <id>] [--mention-only] [--interval 3] [--json]   # 安静等：有别人说话才退出（给能被叫醒的运行时当后台值守）
+  ah pending [--room general] [--clear]   # watch 叫醒时落盘的待处理消息，看/清都在这里
   ah inbox [--limit 20] [--minutes 720] [--all] [--watch]   # 谁在 @ 我而我还没回（活着的会话用这个收活）
   ah unread [--room 房间]      # 还有多少条别人的发言没读（服务端负责排除自己）
   ah read [--room 房间] [--to <消息id>|--all]   # 推进已读游标
@@ -319,6 +368,7 @@ ${dim(`当前 profile：${profileName}（${profilePath}）`)}`;
 async function cmdRegister() {
   const tag = String(FLAGS.tag ?? ARGS[2] ?? '');
   if (!tag) die('缺少 --tag，例如：ah register --tag alice --nickname Alice');
+  requireServerForNewProfile(tag, 'register');
   const body = {
     tag,
     nickname: FLAGS.nickname ?? tag,
@@ -345,9 +395,25 @@ async function cmdRegister() {
 async function cmdLogin() {
   const tag = String(FLAGS.tag ?? ARGS[2] ?? '');
   const token = String(FLAGS.token ?? ARGS[3] ?? '');
-  if (!tag || !token) die('用法：ah login --tag alice --token <token>');
+  if (!tag || !token) die('用法：ah login --tag alice --token <token> [--profile 名称] [--force]');
+  requireServerForNewProfile(tag, 'login');
+
+  // profile 是「一个身份的本机存档」。同名 profile 换个人登录，等于把前一个人的凭据冲掉，
+  // 所以必须先说清楚是谁在覆盖谁 —— 之前这条静默覆盖了 admin 的 token。
+  const stored = readStoredProfile();
+  if (stored.tag && stored.tag !== tag && FLAGS.force !== true) {
+    die(
+      `profile「${profileName}」现在登录的是 @${stored.tag}，换成 @${tag} 会覆盖它的凭据。\n` +
+        `确认要覆盖请加 --force；想各自保留就换个名字：--profile ${tag}`,
+    );
+  }
+
   const res = await request('/api/login', { method: 'POST', body: { tag, token }, auth: false });
-  saveProfile({ server: CONFIG.server, tag: res.member.tag, token, insecure: CONFIG.insecure });
+  const patch = { server: CONFIG.server, tag: res.member.tag, token, insecure: CONFIG.insecure };
+  if (FLAGS.room) patch.room = String(FLAGS.room);
+  // 换人登录时不要顺手继承上一个人的房间
+  else if (stored.tag !== res.member.tag) patch.room = null;
+  saveProfile(patch);
   if (JSON_OUT) return out(res);
   out(`${green('登录成功')} @${res.member.tag}（${res.member.nickname}）${dim(`\n凭据已保存到 ${profilePath}`)}`);
 }
@@ -356,9 +422,10 @@ async function cmdWhoami() {
   needAuth();
   const res = await request('/api/me');
   if (JSON_OUT) return out(res);
+  const tokenText = FLAGS['show-token'] === true ? res.member.token : maskToken(res.member.token);
   out(
     `@${res.member.tag}｜${res.member.nickname}｜${res.member.kind === 'agent' ? `AI(${res.member.agentKind ?? ''})` : '人类'}｜角色 ${res.member.role}\n` +
-      `token=${bold(res.member.token)}\n房间：${res.rooms.map((r) => `${r.name}(${r.memberCount}人/${r.messageCount}条)`).join('、') || '（无）'}\n` +
+      `token=${bold(tokenText)}${FLAGS['show-token'] === true ? '' : dim('（--show-token 看完整）')}\n房间：${res.rooms.map((r) => `${r.name}(${r.memberCount}人/${r.messageCount}条)`).join('、') || '（无）'}\n` +
       dim(`服务地址 ${CONFIG.server}`),
   );
 }
@@ -676,6 +743,60 @@ async function cmdTail() {
  *   ah watch --mentions-only               只在有人 @ 我时退出
  *   ah watch --after 5196                  从 #5196 之后开始等
  */
+/* --------------------------- 待处理队列（ah watch 用） --------------------------- */
+
+function slugRoom(name) {
+  const s = String(name ?? 'room')
+    .replace(/[^\w\u4e00-\u9fa5-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return s.slice(0, 60) || 'room';
+}
+
+function pendingDir() {
+  return path.join(os.homedir(), '.agenthub', 'pending');
+}
+
+/** 一行摘要：被叫醒时先看这个，够用就不用再拉一遍群历史。 */
+function digestLine(item) {
+  const text = String(item.text ?? '').replace(/\s+/g, ' ').slice(0, 120);
+  const where = item.room ? ` in 【${item.room}】` : '';
+  return `#${item.id} @${item.senderTag}${where}: ${text}`;
+}
+
+function parsePendingLine(line) {
+  try {
+    return digestLine(JSON.parse(line));
+  } catch {
+    return line;
+  }
+}
+
+function writePending(roomName, items) {
+  const file = path.join(pendingDir(), `${slugRoom(roomName)}.jsonl`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, `${items.map((it) => JSON.stringify(it)).join('\n')}\n`, 'utf8');
+  return file;
+}
+
+/**
+ * watch 命中后的统一出口。
+ *
+ * 唤醒是花钱的动作：宿主通知 + job_output 已经把成本抬起来一次，
+ * 如果输出再是一大坨或者干脆没有正文，就还得再来一次 ah history。
+ * 所以默认只吐摘要（每条一行、正文前 120 字），完整消息落到磁盘给 ah pending。
+ */
+function emitWatchResult(room, items, { mention = false } = {}) {
+  const pendingFile = writePending(room, items);
+  const digest = items.map(digestLine).join('\n');
+  if (JSON_OUT) {
+    return out({ room, count: items.length, items, digest, pendingFile });
+  }
+  out(
+    `${mention ? `新 @ 到 ${items.length} 条\n\n` : ''}${digest}\n` +
+      dim(`完整消息已写入 ${pendingFile}（ah pending 查看，--clear 清空）`),
+  );
+}
+
 async function cmdWatch() {
   needAuth();
   const mentionsOnly =
@@ -690,11 +811,22 @@ async function cmdWatch() {
     if (FLAGS.tag) query.set('tag', String(FLAGS.tag));
     const url = `/api/inbox?${query.toString()}`;
 
+    // 判据用时间戳，不用「启动那一刻的快照」。
+    // 原来的写法把首次 /api/inbox 返回的条目整批记成基线，于是「进程已启动、首次请求还没回来」
+    // 这 1.0–1.4 秒里到达的消息会被当成「开机前就在等着的」，从此永远吞掉。
+    const startedAtMs = Date.now();
+    const seen = new Set();
+    const afterId =
+      FLAGS.after === undefined || FLAGS.after === true ? null : Number(FLAGS.after);
+
     const first = await requestSoft(url, { timeoutMs: 20_000 });
     if (!first.ok) {
       die(`${first.status ?? '网络错误'} ${first.error}${connectionHint(first.url, first.error)}`);
     }
-    const baseline = new Set((first.data.items ?? []).map((item) => item.message.id));
+    // 只把「确实早于本次启动」的条目记为已见过；窗口期到达的新消息留给主循环叫醒
+    for (const item of first.data.items ?? []) {
+      if (isOlderThanStart(item.message, { afterId, startedAtMs })) seen.add(item.message.id);
+    }
 
     let fails = 0;
     for (;;) {
@@ -707,29 +839,22 @@ async function cmdWatch() {
       }
       fails = 0;
       const fresh = (res.data.items ?? []).filter(
-        (item) => !baseline.has(item.message.id) && !item.answered,
+        (item) => !item.answered && !seen.has(item.message.id),
       );
       if (!fresh.length) continue;
-      if (JSON_OUT) {
-        out({
-          room: FLAGS.room ?? null,
-          count: fresh.length,
-          items: fresh.map((item) => ({
-            room: item.room.name,
-            id: item.message.id,
-            senderTag: item.message.senderTag,
-            senderNickname: item.message.senderNickname,
-            createdAt: item.message.createdAt,
-            text: item.message.text,
-          })),
-        });
-      } else {
-        const render = (item) =>
-          `#${item.message.id} @${item.message.senderTag}（${item.message.senderNickname}）` +
-          ` in 【${item.room.name}】\n${String(item.message.text)}`;
-        out(`新 @ 到 ${fresh.length} 条\n\n${fresh.map(render).join('\n\n')}`);
-      }
-      return;
+      for (const item of fresh) seen.add(item.message.id);
+      return emitWatchResult(
+        fresh[0].room.name,
+        fresh.map((item) => ({
+          room: item.room.name,
+          id: item.message.id,
+          senderTag: item.message.senderTag,
+          senderNickname: item.message.senderNickname,
+          createdAt: item.message.createdAt,
+          text: item.message.text,
+        })),
+        { mention: true },
+      );
     }
   }
 
@@ -763,13 +888,77 @@ async function cmdWatch() {
     );
     if (!messages.length) continue;
     for (const m of messages) lastId = Math.max(lastId, m.id);
-    if (JSON_OUT) {
-      out({ room, count: messages.length, messages: messages.map((m) => ({ ...m, room })) });
-    } else {
-      out(messages.map(fmtMessage).join('\n\n'));
-    }
-    return;
+    return emitWatchResult(
+      room,
+      messages.map((m) => ({
+        room,
+        id: m.id,
+        senderTag: m.senderTag,
+        senderNickname: m.senderNickname,
+        createdAt: m.createdAt,
+        text: m.text,
+        message: m,
+      })),
+    );
   }
+}
+
+/**
+ * 待处理队列：ah watch 叫醒时落盘的完整消息。
+ *
+ *   ah pending              看还有哪些没消化
+ *   ah pending --room X     只看某个房间
+ *   ah pending --clear      清空（回完消息就该清）
+ */
+async function cmdPending() {
+  const dir = pendingDir();
+  const filter = typeof FLAGS.room === 'string' ? slugRoom(FLAGS.room) : null;
+  let files = [];
+  try {
+    files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl')).sort();
+  } catch {
+    files = [];
+  }
+  if (filter) files = files.filter((f) => f.startsWith(filter));
+  if (FLAGS.clear === true) {
+    // 用 unlinkSync：rmSync(...,{force:true}) 在 Windows 上遇到非 ASCII 文件名时
+    // 会静默「成功」但文件还在（git-bash 里实测），删不掉也看不出来。
+    let removed = 0;
+    for (const f of files) {
+      try {
+        fs.unlinkSync(path.join(dir, f));
+        removed += 1;
+      } catch {
+        /* 已经不在了 */
+      }
+    }
+    return out(`已清空 ${removed} 个待处理文件${removed ? `：${files.join('、')}` : ''}`);
+  }
+  if (!files.length) return out(dim(`没有待处理消息（${dir}）`));
+  const rows = files.map((f) => {
+    const file = path.join(dir, f);
+    const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+    return { file, lines };
+  });
+  if (JSON_OUT) {
+    return out({
+      dir,
+      files: rows.map((r) => ({
+        file: r.file,
+        count: r.lines.length,
+        lines: r.lines.map(parsePendingLine),
+      })),
+    });
+  }
+  out(
+    rows
+      .map(
+        (r) =>
+          `${bold(r.file)}｜${r.lines.length} 条\n` +
+          r.lines.slice(-5).map((l) => `  ${parsePendingLine(l)}`).join('\n'),
+      )
+      .join('\n\n'),
+  );
 }
 
 /**
@@ -1564,6 +1753,7 @@ const table = {
   history: cmdHistory,
   tail: cmdTail,
   watch: cmdWatch,
+  pending: cmdPending,
   inbox: cmdInbox,
   unread: cmdUnread,
   read: cmdRead,
@@ -1586,4 +1776,17 @@ if (!handler) {
   out(HELP);
   process.exit(1);
 }
-await handler();
+// `ah login --help` 应该看到用法并正常退出，而不是被当成「缺少 --tag」报错
+if (FLAGS.help === true || FLAGS.h === true) {
+  out(HELP);
+  process.exitCode = 0;
+} else {
+  try {
+    await handler();
+  } catch (err) {
+    if (!(err instanceof DieError)) throw err;
+    process.exitCode = err.code;
+    // 让 stdout/stderr 与 socket 收尾再退（Windows 上直接 exit 会撞 libuv 断言）
+    setImmediate(() => setImmediate(() => process.exit(err.code)));
+  }
+}

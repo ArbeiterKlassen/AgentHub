@@ -6,10 +6,13 @@ cd "$ROOT" || exit 1
 
 PORT=$(node -e 'const n=require("node:net");const s=n.createServer();s.listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close();});')
 DATA="$ROOT/data/tmp/watch-test-data"
-rm -rf "$DATA"; mkdir -p "$DATA"
+FAKE_HOME="$ROOT/data/tmp/watch-test-home"
+rm -rf "$DATA" "$FAKE_HOME"; mkdir -p "$DATA" "$FAKE_HOME"
 AH_PORT=$PORT AH_DATA_DIR="$DATA" AH_HOST=127.0.0.1 node server/dist/index.js >"$DATA/server.log" 2>&1 &
 SRV=$!
-trap 'kill $SRV 2>/dev/null; wait $SRV 2>/dev/null; rm -rf "$DATA"' EXIT
+trap 'kill $SRV 2>/dev/null; wait $SRV 2>/dev/null; rm -rf "$DATA" "$FAKE_HOME"' EXIT
+export HOME="$FAKE_HOME"
+export USERPROFILE="$FAKE_HOME"
 export AH_SERVER="http://127.0.0.1:$PORT"
 AH="node server/bin/ah.mjs"
 
@@ -73,5 +76,22 @@ for _ in $(seq 1 40); do kill -0 $W4 2>/dev/null || { ok=1; break; }; sleep 0.5;
 [ "$ok" = 1 ] || { echo "FAIL 用例4 被 @ 后没退出"; kill $W4 2>/dev/null; exit 1; }
 grep -q '这条是叫你的' "$DATA/watch4.out" || { echo "FAIL 用例4 内容"; cat "$DATA/watch4.out"; exit 1; }
 echo "PASS --mention-only 只在被 @ 时退出"
+
+# --- 用例 5：被叫醒时直接给摘要，完整消息落盘，ah pending 能看能清 ---
+AH_PROFILE=w $AH watch >"$DATA/watch5.out" 2>&1 &
+W5=$!
+sleep 2
+AH_PROFILE=t $AH send "摘要与落盘测试" >/dev/null 2>&1
+ok=0
+for _ in $(seq 1 30); do kill -0 $W5 2>/dev/null || { ok=1; break; }; sleep 0.5; done
+[ "$ok" = 1 ] || { echo "FAIL 用例5 没退出"; kill $W5 2>/dev/null; exit 1; }
+grep -q '@talker' "$DATA/watch5.out" || { echo "FAIL 用例5 摘要里没有 @talker"; cat "$DATA/watch5.out"; exit 1; }
+grep -q '摘要与落盘测试' "$DATA/watch5.out" || { echo "FAIL 用例5 摘要里没有正文"; cat "$DATA/watch5.out"; exit 1; }
+PENDING="$FAKE_HOME/.agenthub/pending"
+ls "$PENDING"/*.jsonl >/dev/null 2>&1 || { echo "FAIL 用例5 没有落盘文件"; exit 1; }
+$AH pending 2>&1 | grep -q '摘要与落盘测试' || { echo "FAIL 用例5 ah pending 看不到"; $AH pending; exit 1; }
+$AH pending --clear >/dev/null 2>&1
+if ls "$PENDING"/*.jsonl >/dev/null 2>&1; then echo "FAIL 用例5 --clear 没清掉"; ls -l "$PENDING"; exit 1; fi
+echo "PASS 叫醒输出摘要、完整消息落盘、ah pending 可看可清"
 
 echo "ALL PASS"
